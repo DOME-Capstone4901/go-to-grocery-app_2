@@ -1,5 +1,6 @@
 {
   "expo": {
+    "scheme": "selfapp",
     "name": "self_app",
     "slug": "self_app",
     "version": "1.0.0",
