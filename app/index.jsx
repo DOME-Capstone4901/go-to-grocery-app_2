@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react'
+import {Link} from 'expo-router'
 import {
   View,
   Text,
@@ -104,6 +105,7 @@ export default function Home() {
         <Pressable style={styles.cartPill} onPress={() => router.push({ pathname: '/details', params: { cartCount } })}>
           <Text style={styles.cartText}>List: {cartCount}</Text>
         </Pressable>
+        <Link href="/filter">Filter</Link>
       </View>
 
       {/* Search input */}
