@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, useEffect, useRef } from 'react'
 import {Link} from 'expo-router'
 import {
   View,
@@ -8,8 +8,13 @@ import {
   FlatList,
   Pressable,
   ScrollView,
+  ActivityIndicator,
+  Modal,
+  RefreshControl,
 } from 'react-native'
 import { router } from 'expo-router'
+import * as Location from 'expo-location'
+import { WebView } from 'react-native-webview'
 
 const GROCERY_ITEMS = [
   { id: '1', name: 'Milk', category: 'Dairy' },
@@ -36,9 +41,17 @@ function uniq(arr) {
 export default function Home() {
   const [query, setQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('All')
-  const [cart, setCart] = useState([]) // array of item ids
-  const [recent, setRecent] = useState([]) // array of strings
+  const [cart, setCart] = useState([])
+  const [recent, setRecent] = useState([])
   const [sortAZ, setSortAZ] = useState(true)
+  const [location, setLocation] = useState(null)
+  const [locationError, setLocationError] = useState(null)
+  const [loadingLocation, setLoadingLocation] = useState(true)
+  const [showLocationModal, setShowLocationModal] = useState(false)
+  const [selectedLocation, setSelectedLocation] = useState(null)
+  const [refreshing, setRefreshing] = useState(false)
+  const mapWebViewRef = useRef(null)
+  const modalMapWebViewRef = useRef(null)
 
   const categories = useMemo(() => {
     return ['All', ...uniq(GROCERY_ITEMS.map((i) => i.category)).sort()]
@@ -71,7 +84,6 @@ export default function Home() {
   const suggestions = useMemo(() => {
     const q = query.trim().toLowerCase()
     if (!q) return []
-    // top 5 autocomplete suggestions based on startsWith first, then includes
     const starts = GROCERY_ITEMS.filter((i) => i.name.toLowerCase().startsWith(q))
     const contains = GROCERY_ITEMS.filter(
       (i) => !i.name.toLowerCase().startsWith(q) && i.name.toLowerCase().includes(q)
@@ -93,9 +105,102 @@ export default function Home() {
 
   const onSubmitSearch = () => pushRecent(query)
 
+  const onRefresh = async () => {
+    setRefreshing(true)
+    await getCurrentLocation()
+    setRefreshing(false)
+  }
+
+  const getCurrentLocation = async () => {
+    try {
+      setLoadingLocation(true)
+      let { status } = await Location.requestForegroundPermissionsAsync()
+      console.log('📍 Location permission status:', status)
+      
+      if (status !== 'granted') {
+        const defaultLocation = {
+          latitude: 37.7749,
+          longitude: -122.4194,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        }
+        console.log('⚠️ Location permission denied. Using default location:')
+        console.log('   Latitude:', defaultLocation.latitude)
+        console.log('   Longitude:', defaultLocation.longitude)
+        setLocation(defaultLocation)
+        setLocationError('Using default location')
+        setLoadingLocation(false)
+        return
+      }
+
+      let currentLocation = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      })
+      
+      const locationData = {
+        latitude: currentLocation.coords.latitude,
+        longitude: currentLocation.coords.longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }
+      
+      console.log('✅ Location captured successfully:')
+      console.log('   Latitude:', locationData.latitude)
+      console.log('   Longitude:', locationData.longitude)
+      console.log('   Full location object:', JSON.stringify(locationData, null, 2))
+      console.log('   Raw coordinates:', {
+        latitude: currentLocation.coords.latitude,
+        longitude: currentLocation.coords.longitude,
+        accuracy: currentLocation.coords.accuracy,
+        altitude: currentLocation.coords.altitude,
+        heading: currentLocation.coords.heading,
+        speed: currentLocation.coords.speed,
+      })
+      
+      setLocation(locationData)
+      setLoadingLocation(false)
+      
+      if (mapWebViewRef.current) {
+        mapWebViewRef.current.injectJavaScript(`
+          (function() {
+            try {
+              var lat = ${locationData.latitude};
+              var lng = ${locationData.longitude};
+              if (window.map && window.marker) {
+                window.map.setView([lat, lng], window.map.getZoom());
+                window.marker.setLatLng([lat, lng]);
+                window.marker.openPopup();
+              }
+            } catch(e) {
+              console.error('Error updating map:', e);
+            }
+          })();
+          true;
+        `)
+      }
+    } catch (error) {
+      const defaultLocation = {
+        latitude: 37.7749,
+        longitude: -122.4194,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }
+      console.error('❌ Error getting location:', error)
+      console.log('⚠️ Using default location due to error:')
+      console.log('   Latitude:', defaultLocation.latitude)
+      console.log('   Longitude:', defaultLocation.longitude)
+      setLocation(defaultLocation)
+      setLocationError('Using default location')
+      setLoadingLocation(false)
+    }
+  }
+
+  useEffect(() => {
+    getCurrentLocation()
+  }, [])
+
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.headerRow}>
         <View>
           <Text style={styles.title}>Grocery Search</Text>
@@ -108,7 +213,277 @@ export default function Home() {
         <Link href="/filter">Filter</Link>
       </View>
 
-      {/* Search input */}
+      <View style={styles.mapContainer}>
+        {loadingLocation ? (
+          <View style={styles.mapLoading}>
+            <ActivityIndicator size="small" color="#111" />
+            <Text style={styles.mapLoadingText}>Loading location...</Text>
+          </View>
+        ) : location ? (
+          <View style={{ flex: 1, position: 'relative' }}>
+            <WebView
+              ref={mapWebViewRef}
+              key={`map-${location.latitude}-${location.longitude}`}
+              style={styles.map}
+              source={{
+                html: `
+                  <!DOCTYPE html>
+                  <html>
+                    <head>
+                      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                      <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                      <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                      <style>
+                        * { margin: 0; padding: 0; box-sizing: border-box; }
+                        html, body { width: 100%; height: 100%; overflow: hidden; }
+                        #map { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+                      </style>
+                    </head>
+                    <body>
+                      <div id="map"></div>
+                      <script>
+                        (function() {
+                          try {
+                            var lat = ${location.latitude};
+                            var lng = ${location.longitude};
+                            var map = L.map('map', {
+                              zoomControl: true,
+                              dragging: true,
+                              touchZoom: true,
+                              doubleClickZoom: true,
+                              scrollWheelZoom: false,
+                              boxZoom: false,
+                              keyboard: false
+                            }).setView([lat, lng], 15);
+                            
+                            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                              attribution: '© OpenStreetMap',
+                              maxZoom: 19
+                            }).addTo(map);
+                            
+                            var marker = L.marker([lat, lng], {
+                              draggable: false
+                            }).addTo(map);
+                            marker.bindPopup('Your Location').openPopup();
+                            
+                            window.map = map;
+                            window.marker = marker;
+                          } catch(e) {
+                            document.body.innerHTML = '<div style="padding: 20px; text-align: center;">Map loading...</div>';
+                          }
+                        })();
+                      </script>
+                    </body>
+                  </html>
+                `,
+              }}
+              scrollEnabled={false}
+              showsHorizontalScrollIndicator={false}
+              showsVerticalScrollIndicator={false}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+              startInLoadingState={true}
+              renderLoading={() => (
+                <View style={styles.mapLoading}>
+                  <ActivityIndicator size="small" color="#111" />
+                </View>
+              )}
+            />
+            <View style={styles.mapButtonsContainer}>
+              <Pressable 
+                style={styles.mapCurrentLocationButton}
+                onPress={getCurrentLocation}
+              >
+                <Text style={styles.mapButtonText}>📍 Current</Text>
+              </Pressable>
+              <Pressable 
+                style={styles.mapEditButton}
+                onPress={() => {
+                  setSelectedLocation(location)
+                  setShowLocationModal(true)
+                }}
+              >
+                <Text style={styles.mapButtonText}>📍 Change</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.mapLoading}>
+            <Text style={styles.mapErrorText}>Unable to load map</Text>
+          </View>
+        )}
+      </View>
+
+      <Modal
+        visible={showLocationModal}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setShowLocationModal(false)}
+      >
+        <View style={styles.modalContainer}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Select Location</Text>
+            <Pressable
+              style={styles.modalCloseButton}
+              onPress={() => setShowLocationModal(false)}
+            >
+              <Text style={styles.modalCloseButtonText}>Cancel</Text>
+            </Pressable>
+          </View>
+          
+          <View style={styles.modalMapContainer}>
+            {selectedLocation ? (
+              <WebView
+                ref={modalMapWebViewRef}
+                style={styles.modalMap}
+                source={{
+                  html: `
+                    <!DOCTYPE html>
+                    <html>
+                      <head>
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                        <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                        <style>
+                          * { margin: 0; padding: 0; box-sizing: border-box; }
+                          html, body { width: 100%; height: 100%; overflow: hidden; }
+                          #map { width: 100%; height: 100%; position: absolute; top: 0; left: 0; }
+                          .center-marker {
+                            position: absolute;
+                            top: 50%;
+                            left: 50%;
+                            transform: translate(-50%, -100%);
+                            z-index: 1000;
+                            pointer-events: none;
+                            font-size: 40px;
+                            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+                          }
+                        </style>
+                      </head>
+                      <body>
+                        <div id="map"></div>
+                        <div class="center-marker">📍</div>
+                        <script>
+                          (function() {
+                            try {
+                              var lat = ${selectedLocation.latitude};
+                              var lng = ${selectedLocation.longitude};
+                              var map = L.map('map', {
+                                zoomControl: true,
+                                dragging: true,
+                                touchZoom: true,
+                                doubleClickZoom: true,
+                                scrollWheelZoom: false,
+                                boxZoom: false,
+                                keyboard: false
+                              }).setView([lat, lng], 15);
+                              
+                              L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                                attribution: '© OpenStreetMap',
+                                maxZoom: 19
+                              }).addTo(map);
+                              
+                              var marker = L.marker([lat, lng], {
+                                draggable: true
+                              }).addTo(map);
+                              marker.bindPopup('Selected Location').openPopup();
+                              
+                              function sendLocation(lat, lng) {
+                                if (window.ReactNativeWebView) {
+                                  window.ReactNativeWebView.postMessage(JSON.stringify({
+                                    type: 'location',
+                                    latitude: lat,
+                                    longitude: lng
+                                  }));
+                                }
+                              }
+                              
+                              var centerMarker = marker;
+                              map.on('moveend', function() {
+                                var center = map.getCenter();
+                                centerMarker.setLatLng([center.lat, center.lng]);
+                                centerMarker.openPopup();
+                                sendLocation(center.lat, center.lng);
+                              });
+                              
+                              marker.on('dragend', function() {
+                                var pos = marker.getLatLng();
+                                map.setView([pos.lat, pos.lng], map.getZoom());
+                                sendLocation(pos.lat, pos.lng);
+                              });
+                              
+                              sendLocation(lat, lng);
+                            } catch(e) {
+                              document.body.innerHTML = '<div style="padding: 20px; text-align: center;">Map loading...</div>';
+                            }
+                          })();
+                        </script>
+                      </body>
+                    </html>
+                  `,
+                }}
+                scrollEnabled={false}
+                showsHorizontalScrollIndicator={false}
+                showsVerticalScrollIndicator={false}
+                javaScriptEnabled={true}
+                domStorageEnabled={true}
+                onMessage={(event) => {
+                  try {
+                    const data = JSON.parse(event.nativeEvent.data)
+                    if (data.type === 'location') {
+                      setSelectedLocation({
+                        latitude: data.latitude,
+                        longitude: data.longitude,
+                        latitudeDelta: 0.01,
+                        longitudeDelta: 0.01,
+                      })
+                      console.log('📍 Location selected in modal:')
+                      console.log('   Latitude:', data.latitude)
+                      console.log('   Longitude:', data.longitude)
+                    }
+                  } catch (e) {
+                    console.error('Error parsing message:', e)
+                  }
+                }}
+                injectedJavaScript={`
+                  (function() {
+                    window.ReactNativeWebView = window.ReactNativeWebView || {
+                      postMessage: function(data) {
+                        window.postMessage(data, '*');
+                      }
+                    };
+                  })();
+                  true;
+                `}
+              />
+            ) : null}
+          </View>
+          
+          <View style={styles.modalFooter}>
+            <Pressable
+              style={styles.modalCancelButton}
+              onPress={() => setShowLocationModal(false)}
+            >
+              <Text style={styles.modalCancelButtonText}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              style={styles.modalConfirmButton}
+              onPress={() => {
+                if (selectedLocation) {
+                  setLocation(selectedLocation)
+                  console.log('✅ Location updated:')
+                  console.log('   Latitude:', selectedLocation.latitude)
+                  console.log('   Longitude:', selectedLocation.longitude)
+                }
+                setShowLocationModal(false)
+              }}
+            >
+              <Text style={styles.modalConfirmButtonText}>Confirm Location</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <TextInput
         value={query}
         onChangeText={setQuery}
@@ -121,7 +496,6 @@ export default function Home() {
         returnKeyType="search"
       />
 
-      {/* Suggestions */}
       {suggestions.length > 0 && (
         <View style={styles.suggestBox}>
           {suggestions.map((s) => (
@@ -140,7 +514,6 @@ export default function Home() {
         </View>
       )}
 
-      {/* Recent searches */}
       {recent.length > 0 && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Recent</Text>
@@ -157,7 +530,6 @@ export default function Home() {
         </View>
       )}
 
-      {/* Category filter */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Category</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
@@ -176,7 +548,6 @@ export default function Home() {
         </ScrollView>
       </View>
 
-      {/* Controls */}
       <View style={styles.controlsRow}>
         <Text style={styles.metaText}>
           Showing {filtered.length} / {GROCERY_ITEMS.length}
@@ -199,12 +570,19 @@ export default function Home() {
         </View>
       </View>
 
-      {/* Results */}
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#111"
+            colors={['#111']}
+          />
+        }
         renderItem={({ item }) => {
           const inCart = cart.includes(item.id)
           return (
@@ -343,4 +721,122 @@ const styles = StyleSheet.create({
 
   empty: { marginTop: 20, alignItems: 'center' },
   emptyText: { color: '#666' },
+
+  mapContainer: {
+    height: 150,
+    borderRadius: 12,
+    marginBottom: 12,
+    overflow: 'hidden',
+    backgroundColor: '#e0e0e0',
+  },
+  map: {
+    flex: 1,
+  },
+  mapLoading: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#e0e0e0',
+  },
+  mapLoadingText: {
+    marginTop: 8,
+    color: '#666',
+    fontSize: 12,
+  },
+  mapErrorText: {
+    color: '#666',
+    fontSize: 12,
+    textAlign: 'center',
+    paddingHorizontal: 16,
+  },
+  mapButtonsContainer: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    flexDirection: 'row',
+    gap: 8,
+    zIndex: 1000,
+  },
+  mapCurrentLocationButton: {
+    backgroundColor: '#111',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  mapEditButton: {
+    backgroundColor: '#111',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  mapButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    paddingTop: 60,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  modalCloseButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  modalCloseButtonText: {
+    color: '#666',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalMapContainer: {
+    flex: 1,
+    backgroundColor: '#e0e0e0',
+  },
+  modalMap: {
+    flex: 1,
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+    gap: 12,
+  },
+  modalCancelButton: {
+    flex: 1,
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalCancelButtonText: {
+    color: '#111',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  modalConfirmButton: {
+    flex: 1,
+    backgroundColor: '#111',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  modalConfirmButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
 })
