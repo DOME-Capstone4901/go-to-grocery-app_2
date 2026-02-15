@@ -7,9 +7,9 @@ Key Features: Smart grocery tracking with expiry alerts AI-powered reminders and
 Project Goals: Help households reduce food waste Simplify grocery organization Use technology to make everyday shopping more efficient
 
 Team Members
-Elsa Joy
-Mikal Debesay
-Olajumoke Kupoluyi
-D'yanna Grey
-Subol Dhital
+Elsa Joy, 
+Mikal Debesay, 
+Olajumoke Kupoluyi, 
+D'yanna Grey, 
+Subol Dhital, 
 Saubhagya Bhandari
