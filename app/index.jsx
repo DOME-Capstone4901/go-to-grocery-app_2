@@ -95,7 +95,7 @@ export default function Home() {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Header */} 
       <View style={styles.headerRow}>
         <View>
           <Text style={styles.title}>Grocery Search</Text>
@@ -157,7 +157,7 @@ export default function Home() {
         </View>
       )}
 
-      {/* Category filter */}
+      {/* Category filter */} 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Category</Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
@@ -199,7 +199,7 @@ export default function Home() {
         </View>
       </View>
 
-      {/* Results */}
+      {/* Results */} 
       <FlatList
         data={filtered}
         keyExtractor={(item) => item.id}
