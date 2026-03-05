@@ -14,15 +14,23 @@ import {
 // Sample pantry items data structure
 const samplePantryItems = [
   { id: '1', name: 'Milk', category: 'Dairy', expirationDate: '2026-01-20', quantity: 2 },
-  { id: '2', name: 'Bread', category: 'Bakery', expirationDate: '2026-01-18', quantity: 1 },
-  { id: '3', name: 'Apples', category: 'Fruits', expirationDate: '2026-01-25', quantity: 5 },
-  { id: '4', name: 'Chicken', category: 'Meat', expirationDate: '2026-01-16', quantity: 1 },
-  { id: '5', name: 'Rice', category: 'Grains', expirationDate: '2027-01-14', quantity: 1 },
-  { id: '6', name: 'Yogurt', category: 'Dairy', expirationDate: '2026-01-22', quantity: 3 },
-  { id: '7', name: 'Tomatoes', category: 'Vegetables', expirationDate: '2026-01-19', quantity: 4 },
+  { id: '2', name: 'Eggs', category: 'Dairy', expirationDate: '2026-01-18', quantity: 1 },
+  { id: '3', name: 'Bread', category: 'Bakery', expirationDate: '2026-01-18', quantity: 1 },
+  { id: '4', name: 'Rice', category: 'Grains', expirationDate: '2027-01-14', quantity: 1 },
+  { id: '5', name: 'Chicken Breast', category: 'Meat', expirationDate: '2026-01-16', quantity: 1 },
+  { id: '6', name: 'Apples', category: 'Produce', expirationDate: '2026-01-25', quantity: 5 },
+  { id: '7', name: 'Bananas', category: 'Produce', expirationDate: '2026-01-25', quantity: 5 },
+  { id: '8', name: 'Tomatoes', category: 'Produce', expirationDate: '2026-01-19', quantity: 4 },
+  { id: '9', name: 'Onion', category: 'Produce', expirationDate: '2027-01-14', quantity: 1 },
+  { id: '10', name: 'Pasta', category: 'Pantry', expirationDate: '2026-01-22', quantity: 3 },
+  { id: '11', name: 'Olive oil', category: 'Pantry', expirationDate: '2026-01-16', quantity: 1 },
+  { id: '12', name: 'Yogurt', category: 'Dairy', expirationDate: '2026-01-22', quantity: 3 },
+  { id: '13', name: 'Cheddar Cheese', category: 'Dairy', expirationDate: '2026-01-15', quantity: 1 },
+  { id: '14', name: 'Spinach', category: 'Produce', expirationDate: '2026-01-19', quantity: 4 },
+  { id: '15', name: 'Salmon', category: 'Meat', expirationDate: '2026-01-19', quantity: 4 },
 ];
 
-const categories = ['All', 'Dairy', 'Bakery', 'Fruits', 'Vegetables', 'Meat', 'Grains', 'Canned', 'Frozen'];
+const categories = ['All', 'Dairy', 'Bakery', 'Produce',, 'Meat', 'Grains', 'Canned', 'Frozen'];
 
 const expirationFilters = [
   { label: 'All', value: 'all' },
