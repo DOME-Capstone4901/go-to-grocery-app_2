@@ -38,17 +38,28 @@ function uniq(arr) {
   return Array.from(new Set(arr))
 }
 
+// Default map center: Denton, Texas
+const DEFAULT_LOCATION = {
+  latitude: 33.2148,
+  longitude: -97.1331,
+  latitudeDelta: 0.01,
+  longitudeDelta: 0.01,
+}
+
 export default function Home() {
   const [query, setQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('All')
   const [cart, setCart] = useState([])
   const [recent, setRecent] = useState([])
   const [sortAZ, setSortAZ] = useState(true)
-  const [location, setLocation] = useState(null)
+  const [location, setLocation] = useState(DEFAULT_LOCATION)
   const [locationError, setLocationError] = useState(null)
   const [loadingLocation, setLoadingLocation] = useState(true)
   const [showLocationModal, setShowLocationModal] = useState(false)
   const [selectedLocation, setSelectedLocation] = useState(null)
+  const [locationSearchQuery, setLocationSearchQuery] = useState('')
+  const [locationSearching, setLocationSearching] = useState(false)
+  const [locationSearchError, setLocationSearchError] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const mapWebViewRef = useRef(null)
   const modalMapWebViewRef = useRef(null)
@@ -118,17 +129,9 @@ export default function Home() {
       console.log('📍 Location permission status:', status)
       
       if (status !== 'granted') {
-        const defaultLocation = {
-          latitude: 37.7749,
-          longitude: -122.4194,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        }
-        console.log('⚠️ Location permission denied. Using default location:')
-        console.log('   Latitude:', defaultLocation.latitude)
-        console.log('   Longitude:', defaultLocation.longitude)
-        setLocation(defaultLocation)
-        setLocationError('Using default location')
+        console.log('⚠️ Location permission denied. Using default location (Denton, TX)')
+        setLocation(DEFAULT_LOCATION)
+        setLocationError('Using default location (Denton, TX)')
         setLoadingLocation(false)
         return
       }
@@ -179,18 +182,10 @@ export default function Home() {
         `)
       }
     } catch (error) {
-      const defaultLocation = {
-        latitude: 37.7749,
-        longitude: -122.4194,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      }
       console.error('❌ Error getting location:', error)
-      console.log('⚠️ Using default location due to error:')
-      console.log('   Latitude:', defaultLocation.latitude)
-      console.log('   Longitude:', defaultLocation.longitude)
-      setLocation(defaultLocation)
-      setLocationError('Using default location')
+      console.log('⚠️ Using default location (Denton, TX) due to error')
+      setLocation(DEFAULT_LOCATION)
+      setLocationError('Using default location (Denton, TX)')
       setLoadingLocation(false)
     }
   }
@@ -198,6 +193,69 @@ export default function Home() {
   useEffect(() => {
     getCurrentLocation()
   }, [])
+
+  const searchLocationByCityOrZip = async () => {
+    const q = locationSearchQuery.trim()
+    if (!q) return
+    setLocationSearching(true)
+    setLocationSearchError(null)
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`
+      const res = await fetch(url, {
+        headers: { 'User-Agent': 'GoToGroceryApp/1.0 (location search)' },
+      })
+      const data = await res.json()
+      if (!Array.isArray(data) || data.length === 0) {
+        setLocationSearchError('Location not found. Try city name or zip code.')
+        setLocationSearching(false)
+        return
+      }
+      const { lat, lon } = data[0]
+      const latNum = parseFloat(lat)
+      const lonNum = parseFloat(lon)
+      const newLoc = {
+        latitude: latNum,
+        longitude: lonNum,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+      }
+      setSelectedLocation(newLoc)
+      setLocationSearchError(null)
+      if (modalMapWebViewRef.current) {
+        modalMapWebViewRef.current.injectJavaScript(`
+          (function() {
+            try {
+              var lat = ${latNum};
+              var lng = ${lonNum};
+              if (window.map && window.marker) {
+                window.map.setView([lat, lng], 15);
+                window.marker.setLatLng([lat, lng]);
+                if (typeof sendLocation === 'function') sendLocation(lat, lng);
+              }
+            } catch(e) { console.error(e); }
+          })();
+          true;
+        `)
+      }
+    } catch (err) {
+      console.error('Geocode error:', err)
+      setLocationSearchError('Could not find location. Check city or zip and try again.')
+    }
+    setLocationSearching(false)
+  }
+
+  const openLocationModal = () => {
+    setSelectedLocation(location)
+    setLocationSearchQuery('')
+    setLocationSearchError(null)
+    setShowLocationModal(true)
+  }
+
+  const closeLocationModal = () => {
+    setShowLocationModal(false)
+    setLocationSearchQuery('')
+    setLocationSearchError(null)
+  }
 
   return (
     <View style={styles.container}>
@@ -298,10 +356,7 @@ export default function Home() {
               </Pressable>
               <Pressable 
                 style={styles.mapEditButton}
-                onPress={() => {
-                  setSelectedLocation(location)
-                  setShowLocationModal(true)
-                }}
+                onPress={openLocationModal}
               >
                 <Text style={styles.mapButtonText}>📍 Change</Text>
               </Pressable>
@@ -318,18 +373,45 @@ export default function Home() {
         visible={showLocationModal}
         animationType="slide"
         transparent={false}
-        onRequestClose={() => setShowLocationModal(false)}
+        onRequestClose={closeLocationModal}
       >
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Select Location</Text>
             <Pressable
               style={styles.modalCloseButton}
-              onPress={() => setShowLocationModal(false)}
+              onPress={closeLocationModal}
             >
               <Text style={styles.modalCloseButtonText}>Cancel</Text>
             </Pressable>
           </View>
+
+          <View style={styles.modalSearchRow}>
+            <TextInput
+              value={locationSearchQuery}
+              onChangeText={(t) => { setLocationSearchQuery(t); setLocationSearchError(null) }}
+              placeholder="City name or zip code"
+              placeholderTextColor="#888"
+              style={styles.modalSearchInput}
+              editable={!locationSearching}
+              onSubmitEditing={searchLocationByCityOrZip}
+              returnKeyType="search"
+            />
+            <Pressable
+              style={[styles.modalSearchButton, locationSearching && styles.modalSearchButtonDisabled]}
+              onPress={searchLocationByCityOrZip}
+              disabled={locationSearching}
+            >
+              {locationSearching ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.modalSearchButtonText}>Search</Text>
+              )}
+            </Pressable>
+          </View>
+          {locationSearchError ? (
+            <Text style={styles.modalSearchError}>{locationSearchError}</Text>
+          ) : null}
           
           <View style={styles.modalMapContainer}>
             {selectedLocation ? (
@@ -462,7 +544,7 @@ export default function Home() {
           <View style={styles.modalFooter}>
             <Pressable
               style={styles.modalCancelButton}
-              onPress={() => setShowLocationModal(false)}
+              onPress={closeLocationModal}
             >
               <Text style={styles.modalCancelButtonText}>Cancel</Text>
             </Pressable>
@@ -799,6 +881,46 @@ const styles = StyleSheet.create({
     color: '#666',
     fontSize: 16,
     fontWeight: '600',
+  },
+  modalSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  modalSearchInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+  },
+  modalSearchButton: {
+    backgroundColor: '#111',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 10,
+    minWidth: 80,
+    alignItems: 'center',
+  },
+  modalSearchButtonDisabled: {
+    opacity: 0.7,
+  },
+  modalSearchButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalSearchError: {
+    color: '#c00',
+    fontSize: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
   },
   modalMapContainer: {
     flex: 1,
