@@ -105,7 +105,10 @@ export default function Home() {
         <Pressable style={styles.cartPill} onPress={() => router.push({ pathname: '/details', params: { cartCount } })}>
           <Text style={styles.cartText}>List: {cartCount}</Text>
         </Pressable>
-        <Link href="/filter">Filter</Link>
+        <View style={{ flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+  <Link href="/mini">Pantry</Link>
+  <Link href="/filter">Filter</Link>
+</View>
       </View>
 
       {/* Search input */}
