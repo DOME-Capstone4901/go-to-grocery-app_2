@@ -12,7 +12,8 @@ import {
 
 const { width } = Dimensions.get('window');
 
-const ProductAnalysisScreen = ({ navigation }) => {
+import { router } from 'expo-router';
+const ProductAnalysisScreen = () => {
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
@@ -90,7 +91,7 @@ const ProductAnalysisScreen = ({ navigation }) => {
       <View style={styles.navigationContainer}>
         <TouchableOpacity 
           style={styles.backButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => router.back()}
         >
           <Text style={styles.backButtonText}>Back</Text>
         </TouchableOpacity>
@@ -102,7 +103,7 @@ const ProductAnalysisScreen = ({ navigation }) => {
           
           <TouchableOpacity 
             style={styles.nextButton}
-            onPress={() => navigation.navigate('Recommendations')}
+            onPress={() => router.push('/(screens)/RecommendationsScreen')}
           >
             <Text style={styles.nextButtonText}>See Alternatives →</Text>
           </TouchableOpacity>

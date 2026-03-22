@@ -14,7 +14,8 @@ import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
 
 const { width } = Dimensions.get('window');
 
-const RecommendationsScreen = ({ navigation }) => {
+import { router } from 'expo-router';
+const RecommendationsScreen = () => {
   const [selectedItems, setSelectedItems] = useState([]);
   const [fadeAnim] = useState(new Animated.Value(0));
 
@@ -49,7 +50,7 @@ const RecommendationsScreen = ({ navigation }) => {
   const handleViewCart = () => {
     if (selectedItems.length > 0) {
       // Navigate to Login screen when cart button is clicked
-      navigation.navigate('Login');
+      router.push('/(screens)/LoginScreen');
     }
   };
 
@@ -157,7 +158,7 @@ const RecommendationsScreen = ({ navigation }) => {
       <View style={styles.header}>
         <TouchableOpacity 
           style={styles.backButton}
-          onPress={() => navigation.goBack()}
+          onPress={() => router.back()}
         >
           <Ionicons name="chevron-back" size={24} color="#2C3E50" />
           <Text style={styles.backText}>Scan</Text>
@@ -350,7 +351,7 @@ const RecommendationsScreen = ({ navigation }) => {
         <View style={styles.bottomActions}>
           <TouchableOpacity 
             style={styles.startShoppingButton}
-            onPress={() => navigation.navigate('Login')}
+            onPress={() => router.push('/(screens)/LoginScreen')}
           >
             <Ionicons name="storefront" size={20} color="#fff" />
             <Text style={styles.startShoppingButtonText}>Find Stores Near You</Text>

@@ -17,7 +17,8 @@ import {
 
 const { width } = Dimensions.get('window');
 
-const LoginScreen = ({ navigation }) => {
+import { router } from 'expo-router';
+const LoginScreen = () => {
   const [isLogin, setIsLogin] = useState(true); // Toggle between login/signup
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -82,7 +83,7 @@ const LoginScreen = ({ navigation }) => {
           Alert.alert(
             'Success',
             'Logged in successfully!',
-            [{ text: 'OK', onPress: () => navigation.navigate('Welcome') }]
+            [{ text: 'OK', onPress: () => router.replace('/(tabs)/home') }]
           );
         } else {
           Alert.alert('Error', 'Invalid email or password');
@@ -187,7 +188,7 @@ const LoginScreen = ({ navigation }) => {
             <Text style={styles.time}>9:56</Text>
             <TouchableOpacity 
               style={styles.cancelButton}
-              onPress={() => navigation.goBack()}
+              onPress={() => router.back()}
               disabled={loading}
             >
               <Text style={styles.cancelText}>Cancel</Text>
@@ -347,7 +348,7 @@ const LoginScreen = ({ navigation }) => {
             {/* Skip/Guest Option */}
             <TouchableOpacity 
               style={styles.skipOption}
-              onPress={() => navigation.navigate('Welcome')}
+              onPress={() => router.replace('/(tabs)/home')}
               disabled={loading}
             >
               <Text style={styles.skipText}>

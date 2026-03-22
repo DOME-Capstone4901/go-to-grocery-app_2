@@ -11,7 +11,8 @@ import {
 
 const { width, height } = Dimensions.get('window');
 
-const WelcomeScreen = ({ navigation }) => {
+import { router } from 'expo-router';
+const WelcomeScreen = () => {
   const [currentIndex, setCurrentIndex] = useState(0);
   const scrollViewRef = useRef(null);
 
@@ -50,7 +51,7 @@ const WelcomeScreen = ({ navigation }) => {
       setCurrentIndex(nextIndex);
     } else {
       // Navigate to ProductAnalysis when on last slide
-      navigation.navigate('ProductAnalysis');
+      router.replace('/(tabs)/home');
     }
   };
 
@@ -72,7 +73,7 @@ const WelcomeScreen = ({ navigation }) => {
     
     const handlePress = () => {
       if (isLast) {
-        navigation.navigate('ProductAnalysis');
+        router.replace('/(tabs)/home');
       } else {
         handleNext();
       }
