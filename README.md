@@ -38,22 +38,32 @@ A cross-platform iOS/Android app that helps users shop smarter, reduce food wast
 
 ```bash
 git clone https://github.com/DOME-Capstone4901/go-to-grocery-app_2.git
-cd go-to-grocery-app
+cd go-to-grocery-app_2
 npm install
 ```
 
 > `.npmrc` is included — no extra flags needed.
 
-### Run
+### Run on Android Emulator
+
+1. Open **Android Studio** → **Virtual Device Manager** → start your emulator
+2. Wait for the emulator to fully boot (home screen visible)
+3. Then run:
 
 ```bash
-# Start dev server (scan QR with Expo Go on your phone)
-npx expo start
-
-# Open directly on Android emulator
 npx expo start --android
+```
 
-# Open on iOS simulator (Mac only)
+> Always start the emulator **before** running the command.
+
+### Run on Physical Phone
+
+1. Install **Expo Go** from the Play Store / App Store
+2. Run `npx expo start` and scan the QR code with your phone
+
+### Run on iOS Simulator (Mac only)
+
+```bash
 npx expo start --ios
 ```
 
