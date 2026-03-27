@@ -1,5 +1,11 @@
-import { Stack } from 'expo-router'
+import { Slot } from 'expo-router';
+import { useEffect } from 'react';
+import { loadPantry } from '../utils/pantryStore';
 
 export default function RootLayout() {
-  return <Stack />
+  useEffect(() => {
+    loadPantry();
+  }, []);
+
+  return <Slot />;
 }

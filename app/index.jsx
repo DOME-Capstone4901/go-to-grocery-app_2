@@ -1,346 +1,292 @@
-import React, { useMemo, useState } from 'react'
-import {Link} from 'expo-router'
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  FlatList,
-  Pressable,
-  ScrollView,
-} from 'react-native'
-import { router } from 'expo-router'
+import React, { useEffect, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import { router } from 'expo-router';
 
-const GROCERY_ITEMS = [
-  { id: '1', name: 'Milk', category: 'Dairy' },
-  { id: '2', name: 'Eggs', category: 'Dairy' },
-  { id: '3', name: 'Bread', category: 'Bakery' },
-  { id: '4', name: 'Rice', category: 'Grains' },
-  { id: '5', name: 'Chicken Breast', category: 'Meat' },
-  { id: '6', name: 'Apples', category: 'Produce' },
-  { id: '7', name: 'Bananas', category: 'Produce' },
-  { id: '8', name: 'Tomatoes', category: 'Produce' },
-  { id: '9', name: 'Onions', category: 'Produce' },
-  { id: '10', name: 'Pasta', category: 'Pantry' },
-  { id: '11', name: 'Olive Oil', category: 'Pantry' },
-  { id: '12', name: 'Yogurt', category: 'Dairy' },
-  { id: '13', name: 'Cheddar Cheese', category: 'Dairy' },
-  { id: '14', name: 'Spinach', category: 'Produce' },
-  { id: '15', name: 'Salmon', category: 'Meat' },
-]
+import { getPantryItems, deletePantryItem } from '../utils/pantryStore';
+import { getDaysUntilExpiration } from '../utils/expiration';
+import { isLowStock } from '../utils/lowStock';
 
-function uniq(arr) {
-  return Array.from(new Set(arr))
-}
+import { getPantrySuggestions } from '../utils/suggestions';
+import { getRecipeSuggestions } from '../utils/recipeAI';
 
-export default function Home() {
-  const [query, setQuery] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('All')
-  const [cart, setCart] = useState([]) // array of item ids
-  const [recent, setRecent] = useState([]) // array of strings
-  const [sortAZ, setSortAZ] = useState(true)
+import { addToGroceryList } from '../utils/groceryStore';
+import { scheduleExpirationAlerts } from '../utils/notifications';
 
-  const categories = useMemo(() => {
-    return ['All', ...uniq(GROCERY_ITEMS.map((i) => i.category)).sort()]
-  }, [])
+export default function HomeScreen() {
+  const [pantryCount, setPantryCount] = useState(0);
+  const [lowStockCount, setLowStockCount] = useState(0);
+  const [expiringSoonCount, setExpiringSoonCount] = useState(0);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
+  const [suggestions, setSuggestions] = useState([]);
+  const [recipes, setRecipes] = useState([]);
 
-    let list = GROCERY_ITEMS
+  useEffect(() => {
+    const items = getPantryItems();
 
-    if (selectedCategory !== 'All') {
-      list = list.filter((i) => i.category === selectedCategory)
-    }
+    setPantryCount(items.length);
+    setLowStockCount(items.filter(i => isLowStock(i)).length);
 
-    if (q) {
-      list = list.filter((i) => {
-        const hay = `${i.name} ${i.category}`.toLowerCase()
-        return hay.includes(q)
-      })
-    }
+    setExpiringSoonCount(
+      items.filter(i => {
+        const days = getDaysUntilExpiration(i.expirationDate);
+        return days >= 0 && days <= 3;
+      }).length
+    );
 
-    list = [...list].sort((a, b) => {
-      const cmp = a.name.localeCompare(b.name)
-      return sortAZ ? cmp : -cmp
-    })
+    setSuggestions(getPantrySuggestions(items));
+    setRecipes(getRecipeSuggestions());
 
-    return list
-  }, [query, selectedCategory, sortAZ])
-
-  const suggestions = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return []
-    // top 5 autocomplete suggestions based on startsWith first, then includes
-    const starts = GROCERY_ITEMS.filter((i) => i.name.toLowerCase().startsWith(q))
-    const contains = GROCERY_ITEMS.filter(
-      (i) => !i.name.toLowerCase().startsWith(q) && i.name.toLowerCase().includes(q)
-    )
-    return [...starts, ...contains].slice(0, 5)
-  }, [query])
-
-  const cartCount = cart.length
-
-  const toggleCart = (itemId) => {
-    setCart((prev) => (prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]))
-  }
-
-  const pushRecent = (text) => {
-    const t = text.trim()
-    if (!t) return
-    setRecent((prev) => [t, ...prev.filter((x) => x !== t)].slice(0, 6))
-  }
-
-  const onSubmitSearch = () => pushRecent(query)
+    scheduleExpirationAlerts();
+  }, []);
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.title}>Grocery Search</Text>
-          <Text style={styles.subtitle}>Find items fast • add to list</Text>
+    <ScrollView contentContainerStyle={styles.container}>
+      <Text style={styles.title}>My Pantry App</Text>
+
+      {/* Stats */}
+      <View style={styles.statsContainer}>
+        <View style={styles.statCard}>
+          <Text style={styles.statNumber}>{pantryCount}</Text>
+          <Text style={styles.statLabel}>Total Items</Text>
         </View>
 
-        <Pressable style={styles.cartPill} onPress={() => router.push({ pathname: '/details', params: { cartCount } })}>
-          <Text style={styles.cartText}>List: {cartCount}</Text>
-        </Pressable>
-        <Link href="/filter">Filter</Link>
+        <View style={styles.statCard}>
+          <Text style={[styles.statNumber, lowStockCount > 0 && styles.alertText]}>
+            {lowStockCount}
+          </Text>
+          <Text style={styles.statLabel}>Low Stock</Text>
+        </View>
+
+        <View style={styles.statCard}>
+          <Text style={[styles.statNumber, expiringSoonCount > 0 && styles.alertText]}>
+            {expiringSoonCount}
+          </Text>
+          <Text style={styles.statLabel}>Expiring Soon</Text>
+        </View>
       </View>
 
-      {/* Search input */}
-      <TextInput
-        value={query}
-        onChangeText={setQuery}
-        placeholder="Search items (milk, apple, pasta...)"
-        placeholderTextColor="#888"
-        style={styles.input}
-        autoCapitalize="none"
-        autoCorrect={false}
-        onSubmitEditing={onSubmitSearch}
-        returnKeyType="search"
-      />
-
-      {/* Suggestions */}
+      {/* AI Pantry Suggestions */}
       {suggestions.length > 0 && (
-        <View style={styles.suggestBox}>
-          {suggestions.map((s) => (
-            <Pressable
-              key={s.id}
-              style={styles.suggestRow}
-              onPress={() => {
-                setQuery(s.name)
-                pushRecent(s.name)
-              }}
-            >
-              <Text style={styles.suggestText}>{s.name}</Text>
-              <Text style={styles.suggestMuted}>{s.category}</Text>
-            </Pressable>
+        <View style={styles.suggestionBox}>
+          <Text style={styles.sectionTitle}>Smart Pantry Suggestions</Text>
+
+          {suggestions.map((s, index) => (
+            <View key={index} style={styles.suggestionCard}>
+              <Text style={styles.suggestionText}>{s.message}</Text>
+
+              {s.type === 'lowStock' && (
+                <TouchableOpacity
+                  style={styles.suggestionButton}
+                  onPress={() => addToGroceryList(s.item)}
+                >
+                  <Text style={styles.suggestionButtonText}>Add</Text>
+                </TouchableOpacity>
+              )}
+
+              {s.type === 'expiringSoon' && (
+                <TouchableOpacity
+                  style={styles.suggestionButton}
+                  onPress={() => scheduleExpirationAlerts()}
+                >
+                  <Text style={styles.suggestionButtonText}>Remind Me</Text>
+                </TouchableOpacity>
+              )}
+
+              {s.type === 'expired' && (
+                <TouchableOpacity
+                  style={styles.suggestionButton}
+                  onPress={() => deletePantryItem(s.item.id)}
+                >
+                  <Text style={styles.suggestionButtonText}>Remove</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           ))}
         </View>
       )}
 
-      {/* Recent searches */}
-      {recent.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Recent</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-            {recent.map((r) => (
-              <Pressable key={r} style={styles.chip} onPress={() => setQuery(r)}>
-                <Text style={styles.chipText}>{r}</Text>
-              </Pressable>
-            ))}
-            <Pressable style={[styles.chip, styles.chipDark]} onPress={() => setRecent([])}>
-              <Text style={[styles.chipText, styles.chipTextDark]}>Clear</Text>
-            </Pressable>
-          </ScrollView>
+      {/* AI Recipe Suggestions */}
+      {recipes.length > 0 && (
+        <View style={styles.recipeBox}>
+          <Text style={styles.sectionTitle}>Recipe Ideas</Text>
+
+          {recipes.map((r, index) => (
+            <View key={index} style={styles.recipeCard}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.recipeName}>{r.name}</Text>
+
+                {r.canCookNow ? (
+                  <Text style={styles.readyText}>You can cook this now</Text>
+                ) : (
+                  <Text style={styles.missingText}>
+                    Missing: {r.missing.join(', ')}
+                  </Text>
+                )}
+              </View>
+
+              {!r.canCookNow && (
+                <TouchableOpacity
+                  style={styles.recipeButton}
+                  onPress={() => {
+                    r.missing.forEach(m => addToGroceryList({ name: m }));
+                  }}
+                >
+                  <Text style={styles.recipeButtonText}>Add Missing</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ))}
         </View>
       )}
 
-      {/* Category filter */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Category</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-          {categories.map((c) => {
-            const active = c === selectedCategory
-            return (
-              <Pressable
-                key={c}
-                style={[styles.chip, active && styles.chipActive]}
-                onPress={() => setSelectedCategory(c)}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
-              </Pressable>
-            )
-          })}
-        </ScrollView>
-      </View>
+      {/* Navigation Buttons */}
+      <TouchableOpacity style={styles.button} onPress={() => router.push('/MainPantryTab')}>
+        <Text style={styles.buttonText}>View Pantry</Text>
+      </TouchableOpacity>
 
-      {/* Controls */}
-      <View style={styles.controlsRow}>
-        <Text style={styles.metaText}>
-          Showing {filtered.length} / {GROCERY_ITEMS.length}
-        </Text>
+      <TouchableOpacity style={styles.button} onPress={() => router.push('/groceryList')}>
+        <Text style={styles.buttonText}>Grocery List</Text>
+      </TouchableOpacity>
 
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Pressable style={styles.smallBtn} onPress={() => setSortAZ((v) => !v)}>
-            <Text style={styles.smallBtnText}>{sortAZ ? 'A–Z' : 'Z–A'}</Text>
-          </Pressable>
+      <TouchableOpacity style={styles.button} onPress={() => router.push('/addToPantry')}>
+        <Text style={styles.buttonText}>Add New Item</Text>
+      </TouchableOpacity>
 
-          <Pressable
-            style={styles.smallBtn}
-            onPress={() => {
-              setQuery('')
-              setSelectedCategory('All')
-            }}
-          >
-            <Text style={styles.smallBtnText}>Reset</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      {/* Results */}
-      <FlatList
-        data={filtered}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        keyboardShouldPersistTaps="handled"
-        renderItem={({ item }) => {
-          const inCart = cart.includes(item.id)
-          return (
-            <Pressable
-              style={styles.row}
-              onPress={() =>
-                router.push({
-                  pathname: '/details',
-                  params: { name: item.name, category: item.category, inCart: inCart ? 'yes' : 'no' },
-                })
-              }
-            >
-              <View>
-                <Text style={styles.itemName}>{item.name}</Text>
-                <Text style={styles.itemCategory}>{item.category}</Text>
-              </View>
-
-              <Pressable
-                style={[styles.addBtn, inCart && styles.addBtnActive]}
-                onPress={() => toggleCart(item.id)}
-              >
-                <Text style={[styles.addBtnText, inCart && styles.addBtnTextActive]}>
-                  {inCart ? 'Added' : 'Add'}
-                </Text>
-              </Pressable>
-            </Pressable>
-          )
-        }}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>No matches. Try another search.</Text>
-          </View>
-        }
-      />
-    </View>
-  )
+      <TouchableOpacity style={styles.button} onPress={() => router.push('/scan')}>
+        <Text style={styles.buttonText}>Scan Barcode</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#f5f5f5' },
+  container: {
+    padding: 25,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+  },
+  title: {
+    fontSize: 32,
+    fontWeight: '700',
+    marginBottom: 30,
+    color: '#333',
+  },
 
-  headerRow: {
-    marginTop: 10,
+  // Stats
+  statsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 30,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+    padding: 20,
+    marginHorizontal: 5,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  statNumber: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#333',
+  },
+  alertText: {
+    color: '#d32f2f',
+  },
+  statLabel: {
+    marginTop: 5,
+    fontSize: 14,
+    color: '#666',
+  },
+
+  // Suggestions
+  sectionTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 10,
+  },
+  suggestionBox: {
+    width: '100%',
+    marginBottom: 25,
+  },
+  suggestionCard: {
+    backgroundColor: '#f0f8ff',
+    padding: 15,
+    borderRadius: 10,
     marginBottom: 10,
     flexDirection: 'row',
-    alignItems: 'flex-end',
     justifyContent: 'space-between',
+    alignItems: 'center',
   },
-  title: { fontSize: 26, fontWeight: '700' },
-  subtitle: { marginTop: 4, color: '#666' },
-  cartPill: {
-    backgroundColor: '#111',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-  },
-  cartText: { color: '#fff', fontWeight: '700' },
-
-  input: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+  suggestionText: {
+    flex: 1,
     fontSize: 16,
+    color: '#333',
   },
-
-  suggestBox: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    marginTop: 8,
-    overflow: 'hidden',
-  },
-  suggestRow: {
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  suggestText: { fontWeight: '700' },
-  suggestMuted: { color: '#666' },
-
-  section: { marginTop: 12 },
-  sectionTitle: { fontWeight: '700', marginBottom: 8 },
-
-  chipRow: { gap: 8, paddingBottom: 4 },
-  chip: {
-    backgroundColor: '#fff',
+  suggestionButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 6,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
+    borderRadius: 8,
+    marginLeft: 10,
   },
-  chipText: { fontWeight: '600' },
-  chipActive: { backgroundColor: '#111' },
-  chipTextActive: { color: '#fff' },
-  chipDark: { backgroundColor: '#111' },
-  chipTextDark: { color: '#fff' },
+  suggestionButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
 
-  controlsRow: {
-    marginTop: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  // Recipes
+  recipeBox: {
+    width: '100%',
+    marginBottom: 25,
   },
-  metaText: { color: '#666' },
-  smallBtn: {
-    backgroundColor: '#111',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+  recipeCard: {
+    backgroundColor: '#fff8e1',
+    padding: 15,
     borderRadius: 10,
-  },
-  smallBtnText: { color: '#fff', fontWeight: '700' },
-
-  list: { paddingTop: 12, paddingBottom: 24 },
-  row: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 14,
     marginBottom: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
   },
-  itemName: { fontSize: 16, fontWeight: '700' },
-  itemCategory: { marginTop: 2, color: '#666' },
+  recipeName: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#333',
+  },
+  readyText: {
+    color: '#2e7d32',
+    marginTop: 4,
+  },
+  missingText: {
+    color: '#d32f2f',
+    marginTop: 4,
+  },
+  recipeButton: {
+    backgroundColor: '#007AFF',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginLeft: 10,
+  },
+  recipeButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
 
-  addBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+  // Buttons
+  button: {
+    width: '100%',
+    backgroundColor: '#007AFF',
+    paddingVertical: 15,
     borderRadius: 10,
-    backgroundColor: '#f0f0f0',
+    marginBottom: 15,
   },
-  addBtnActive: { backgroundColor: '#111' },
-  addBtnText: { fontWeight: '700' },
-  addBtnTextActive: { color: '#fff' },
-
-  empty: { marginTop: 20, alignItems: 'center' },
-  emptyText: { color: '#666' },
-})
+  buttonText: {
+    color: '#fff',
+    fontWeight: '700',
+    textAlign: 'center',
+    fontSize: 18,
+  },
+});
