@@ -1,3 +1,42 @@
+<<<<<<< HEAD
+import { Tabs } from 'expo-router';
+import Ionicons from '@expo/vector-icons/Ionicons';
+
+export default function Layout() {
+  return (
+    <Tabs screenOptions={{ headerShown: false }}>
+      
+      <Tabs.Screen
+        name="MainPantryTab"
+        options={{
+          title: 'Pantry',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="home-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="groceryList"
+        options={{
+          title: 'Grocery List',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="cart-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="addToPantry"
+        options={{
+          title: 'Add Item',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="add-circle-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+=======
 import { Tabs } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 
@@ -30,11 +69,21 @@ export default function TabLayout() {
           ),
         }}
       />
+>>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
       <Tabs.Screen
         name="scan"
         options={{
           title: 'Scan',
           tabBarIcon: ({ color, size }) => (
+<<<<<<< HEAD
+            <Ionicons name="barcode-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+    </Tabs>
+  );
+=======
             <Ionicons name="scan" size={size} color={color} />
           ),
         }}
@@ -50,4 +99,5 @@ export default function TabLayout() {
       />
     </Tabs>
   )
+>>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
 }
