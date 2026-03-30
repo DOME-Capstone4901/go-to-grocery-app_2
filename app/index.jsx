@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { router } from 'expo-router';
@@ -290,3 +291,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
 });
+=======
+import { Redirect } from "expo-router"
+export default function Index() {
+  return <Redirect href="/(screens)/WelcomeScreen" />
+}
+>>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
