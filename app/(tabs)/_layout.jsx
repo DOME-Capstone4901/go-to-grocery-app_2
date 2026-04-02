@@ -1,9 +1,27 @@
 import { Tabs } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { palette } from '../../utils/theme';
 
 export default function Layout() {
   return (
-    <Tabs screenOptions={{ headerShown: false }}>
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: palette.orange,
+        tabBarInactiveTintColor: palette.muted,
+        tabBarStyle: {
+          backgroundColor: palette.surface,
+          borderTopColor: palette.border,
+          height: 62,
+          paddingBottom: 8,
+          paddingTop: 6,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '600',
+        },
+      }}
+    >
       
       <Tabs.Screen
         name="MainPantryTab"
@@ -42,6 +60,13 @@ export default function Layout() {
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="barcode-outline" size={size} color={color} />
           ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="myPantry"
+        options={{
+          href: null,
         }}
       />
 

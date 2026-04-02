@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Modal, Pressable } from 'react-native';
+import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { palette, shadows } from '../../utils/theme';
 
 export default function Scan() {
   const [visible, setVisible] = useState(true);
@@ -26,9 +27,7 @@ export default function Scan() {
         </View>
       </Modal>
 
-      <Text style={styles.placeholderText}>
-        Scan feature coming soon…
-      </Text>
+      <Text style={styles.placeholderText}>Scan feature coming soon...</Text>
     </View>
   );
 }
@@ -38,44 +37,49 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    backgroundColor: palette.bg,
   },
   placeholderText: {
     fontSize: 18,
-    opacity: 0.5,
+    color: palette.muted,
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.35)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
   modalBox: {
-    backgroundColor: 'white',
+    backgroundColor: palette.surface,
     borderRadius: 12,
     padding: 25,
     width: '85%',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadows.card,
   },
   title: {
     fontSize: 22,
     fontWeight: '700',
     marginBottom: 10,
+    color: palette.greenDeep,
   },
   message: {
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 20,
-    opacity: 0.8,
+    color: palette.text,
   },
   button: {
-    backgroundColor: '#6C63FF',
+    backgroundColor: palette.orange,
     paddingVertical: 10,
     paddingHorizontal: 25,
     borderRadius: 8,
   },
   buttonText: {
-    color: 'white',
+    color: '#fff',
     fontSize: 16,
     fontWeight: '600',
   },

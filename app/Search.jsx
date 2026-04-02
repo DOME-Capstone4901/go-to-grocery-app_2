@@ -1,15 +1,17 @@
-import React, { useMemo, useState } from 'react'
-import {Link} from 'expo-router'
+import React, { useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
+  Alert,
   FlatList,
   Pressable,
   ScrollView,
-} from 'react-native'
-import { router } from 'expo-router'
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { router } from 'expo-router';
+import { addToGroceryList, getGroceryList } from '../utils/groceryStore';
+import { palette, shadows } from '../utils/theme';
 
 const GROCERY_ITEMS = [
   { id: '1', name: 'Milk', category: 'Dairy' },
@@ -27,88 +29,104 @@ const GROCERY_ITEMS = [
   { id: '13', name: 'Cheddar Cheese', category: 'Dairy' },
   { id: '14', name: 'Spinach', category: 'Produce' },
   { id: '15', name: 'Salmon', category: 'Meat' },
-]
+];
 
 function uniq(arr) {
-  return Array.from(new Set(arr))
+  return Array.from(new Set(arr));
 }
 
-export default function Home() {
-  const [query, setQuery] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('All')
-  const [cart, setCart] = useState([]) // array of item ids
-  const [recent, setRecent] = useState([]) // array of strings
-  const [sortAZ, setSortAZ] = useState(true)
+export default function SearchScreen() {
+  const [query, setQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('All');
+  const [recent, setRecent] = useState([]);
+  const [sortAZ, setSortAZ] = useState(true);
+  const [addedIds, setAddedIds] = useState([]);
 
-  const categories = useMemo(() => {
-    return ['All', ...uniq(GROCERY_ITEMS.map((i) => i.category)).sort()]
-  }, [])
+  const categories = useMemo(
+    () => ['All', ...uniq(GROCERY_ITEMS.map(item => item.category)).sort()],
+    []
+  );
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-
-    let list = GROCERY_ITEMS
+    const q = query.trim().toLowerCase();
+    let list = GROCERY_ITEMS;
 
     if (selectedCategory !== 'All') {
-      list = list.filter((i) => i.category === selectedCategory)
+      list = list.filter(item => item.category === selectedCategory);
     }
 
     if (q) {
-      list = list.filter((i) => {
-        const hay = `${i.name} ${i.category}`.toLowerCase()
-        return hay.includes(q)
-      })
+      list = list.filter(item => {
+        const hay = `${item.name} ${item.category}`.toLowerCase();
+        return hay.includes(q);
+      });
     }
 
-    list = [...list].sort((a, b) => {
-      const cmp = a.name.localeCompare(b.name)
-      return sortAZ ? cmp : -cmp
-    })
-
-    return list
-  }, [query, selectedCategory, sortAZ])
+    return [...list].sort((a, b) => {
+      const cmp = a.name.localeCompare(b.name);
+      return sortAZ ? cmp : -cmp;
+    });
+  }, [query, selectedCategory, sortAZ]);
 
   const suggestions = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return []
-    // top 5 autocomplete suggestions based on startsWith first, then includes
-    const starts = GROCERY_ITEMS.filter((i) => i.name.toLowerCase().startsWith(q))
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+
+    const starts = GROCERY_ITEMS.filter(item =>
+      item.name.toLowerCase().startsWith(q)
+    );
     const contains = GROCERY_ITEMS.filter(
-      (i) => !i.name.toLowerCase().startsWith(q) && i.name.toLowerCase().includes(q)
-    )
-    return [...starts, ...contains].slice(0, 5)
-  }, [query])
+      item =>
+        !item.name.toLowerCase().startsWith(q) &&
+        item.name.toLowerCase().includes(q)
+    );
 
-  const cartCount = cart.length
+    return [...starts, ...contains].slice(0, 5);
+  }, [query]);
 
-  const toggleCart = (itemId) => {
-    setCart((prev) => (prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]))
-  }
+  const groceryCount = getGroceryList().length;
 
-  const pushRecent = (text) => {
-    const t = text.trim()
-    if (!t) return
-    setRecent((prev) => [t, ...prev.filter((x) => x !== t)].slice(0, 6))
-  }
+  const pushRecent = text => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setRecent(prev => [trimmed, ...prev.filter(item => item !== trimmed)].slice(0, 6));
+  };
 
-  const onSubmitSearch = () => pushRecent(query)
+  const addItemToList = item => {
+    const alreadyExists = getGroceryList().some(
+      entry => entry.name.toLowerCase() === item.name.toLowerCase()
+    );
+
+    addToGroceryList({ name: item.name, quantity: 1 });
+    setAddedIds(prev => (prev.includes(item.id) ? prev : [...prev, item.id]));
+    pushRecent(item.name);
+
+    Alert.alert(
+      alreadyExists ? 'Updated grocery list' : 'Added to grocery list',
+      alreadyExists
+        ? `${item.name} quantity was increased in your list.`
+        : `${item.name} was added to your grocery list.`
+    );
+  };
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      <View style={styles.decorBlobOne} />
+      <View style={styles.decorBlobTwo} />
       <View style={styles.headerRow}>
         <View>
           <Text style={styles.title}>Grocery Search</Text>
-          <Text style={styles.subtitle}>Find items fast • add to list</Text>
+          <Text style={styles.subtitle}>Find items fast and add them to your list</Text>
         </View>
 
-        <Pressable style={styles.cartPill} onPress={() => router.push({ pathname: '/details', params: { cartCount } })}>
-          <Text style={styles.cartText}>List: {cartCount}</Text>
+        <Pressable
+          style={styles.cartPill}
+          onPress={() => router.push('/groceryList')}
+        >
+          <Text style={styles.cartText}>List: {groceryCount}</Text>
         </Pressable>
-        <Link href="/filter">Filter</Link>
       </View>
 
-      {/* Search input */}
       <TextInput
         value={query}
         onChangeText={setQuery}
@@ -117,81 +135,90 @@ export default function Home() {
         style={styles.input}
         autoCapitalize="none"
         autoCorrect={false}
-        onSubmitEditing={onSubmitSearch}
+        onSubmitEditing={() => pushRecent(query)}
         returnKeyType="search"
       />
 
-      {/* Suggestions */}
       {suggestions.length > 0 && (
         <View style={styles.suggestBox}>
-          {suggestions.map((s) => (
+          {suggestions.map(item => (
             <Pressable
-              key={s.id}
+              key={item.id}
               style={styles.suggestRow}
               onPress={() => {
-                setQuery(s.name)
-                pushRecent(s.name)
+                setQuery(item.name);
+                pushRecent(item.name);
               }}
             >
-              <Text style={styles.suggestText}>{s.name}</Text>
-              <Text style={styles.suggestMuted}>{s.category}</Text>
+              <Text style={styles.suggestText}>{item.name}</Text>
+              <Text style={styles.suggestMuted}>{item.category}</Text>
             </Pressable>
           ))}
         </View>
       )}
 
-      {/* Recent searches */}
       {recent.length > 0 && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Recent</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-            {recent.map((r) => (
-              <Pressable key={r} style={styles.chip} onPress={() => setQuery(r)}>
-                <Text style={styles.chipText}>{r}</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipRow}
+          >
+            {recent.map(item => (
+              <Pressable key={item} style={styles.chip} onPress={() => setQuery(item)}>
+                <Text style={styles.chipText}>{item}</Text>
               </Pressable>
             ))}
-            <Pressable style={[styles.chip, styles.chipDark]} onPress={() => setRecent([])}>
+            <Pressable
+              style={[styles.chip, styles.chipDark]}
+              onPress={() => setRecent([])}
+            >
               <Text style={[styles.chipText, styles.chipTextDark]}>Clear</Text>
             </Pressable>
           </ScrollView>
         </View>
       )}
 
-      {/* Category filter */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Category</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-          {categories.map((c) => {
-            const active = c === selectedCategory
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.chipRow}
+        >
+          {categories.map(category => {
+            const active = category === selectedCategory;
             return (
               <Pressable
-                key={c}
+                key={category}
                 style={[styles.chip, active && styles.chipActive]}
-                onPress={() => setSelectedCategory(c)}
+                onPress={() => setSelectedCategory(category)}
               >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                  {category}
+                </Text>
               </Pressable>
-            )
+            );
           })}
         </ScrollView>
       </View>
 
-      {/* Controls */}
       <View style={styles.controlsRow}>
         <Text style={styles.metaText}>
           Showing {filtered.length} / {GROCERY_ITEMS.length}
         </Text>
 
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Pressable style={styles.smallBtn} onPress={() => setSortAZ((v) => !v)}>
-            <Text style={styles.smallBtnText}>{sortAZ ? 'A–Z' : 'Z–A'}</Text>
+        <View style={styles.buttonRow}>
+          <Pressable style={styles.smallBtn} onPress={() => setSortAZ(value => !value)}>
+            <Text style={styles.smallBtnText}>{sortAZ ? 'A-Z' : 'Z-A'}</Text>
           </Pressable>
 
           <Pressable
             style={styles.smallBtn}
             onPress={() => {
-              setQuery('')
-              setSelectedCategory('All')
+              setQuery('');
+              setSelectedCategory('All');
             }}
           >
             <Text style={styles.smallBtnText}>Reset</Text>
@@ -199,39 +226,31 @@ export default function Home() {
         </View>
       </View>
 
-      {/* Results */}
       <FlatList
         data={filtered}
-        keyExtractor={(item) => item.id}
+        keyExtractor={item => item.id}
         contentContainerStyle={styles.list}
         keyboardShouldPersistTaps="handled"
         renderItem={({ item }) => {
-          const inCart = cart.includes(item.id)
+          const added = addedIds.includes(item.id);
+
           return (
-            <Pressable
-              style={styles.row}
-              onPress={() =>
-                router.push({
-                  pathname: '/details',
-                  params: { name: item.name, category: item.category, inCart: inCart ? 'yes' : 'no' },
-                })
-              }
-            >
+            <View style={styles.row}>
               <View>
                 <Text style={styles.itemName}>{item.name}</Text>
                 <Text style={styles.itemCategory}>{item.category}</Text>
               </View>
 
               <Pressable
-                style={[styles.addBtn, inCart && styles.addBtnActive]}
-                onPress={() => toggleCart(item.id)}
+                style={[styles.addBtn, added && styles.addBtnActive]}
+                onPress={() => addItemToList(item)}
               >
-                <Text style={[styles.addBtnText, inCart && styles.addBtnTextActive]}>
-                  {inCart ? 'Added' : 'Add'}
+                <Text style={[styles.addBtnText, added && styles.addBtnTextActive]}>
+                  {added ? 'Added' : 'Add'}
                 </Text>
               </Pressable>
-            </Pressable>
-          )
+            </View>
+          );
         }}
         ListEmptyComponent={
           <View style={styles.empty}>
@@ -240,12 +259,37 @@ export default function Home() {
         }
       />
     </View>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#f5f5f5' },
-
+  container: {
+    flex: 1,
+    padding: 16,
+    backgroundColor: palette.bg,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  decorBlobOne: {
+    position: 'absolute',
+    top: -28,
+    right: -34,
+    width: 150,
+    height: 150,
+    borderRadius: 999,
+    backgroundColor: '#F8D0B5',
+    opacity: 0.24,
+  },
+  decorBlobTwo: {
+    position: 'absolute',
+    top: 142,
+    left: -42,
+    width: 126,
+    height: 126,
+    borderRadius: 999,
+    backgroundColor: '#DCE7D4',
+    opacity: 0.2,
+  },
   headerRow: {
     marginTop: 10,
     marginBottom: 10,
@@ -253,29 +297,36 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     justifyContent: 'space-between',
   },
-  title: { fontSize: 26, fontWeight: '700' },
-  subtitle: { marginTop: 4, color: '#666' },
+  title: { fontSize: 30, fontWeight: '800', color: palette.greenDeep, letterSpacing: 0.2 },
+  subtitle: { marginTop: 4, color: palette.muted, maxWidth: 230, lineHeight: 20 },
   cartPill: {
-    backgroundColor: '#111',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    backgroundColor: palette.orange,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
     borderRadius: 999,
+    borderTopWidth: 1,
+    borderTopColor: palette.orangeSoft,
+    borderBottomWidth: 3,
+    borderBottomColor: palette.orangeDeep,
+    ...shadows.card,
   },
   cartText: { color: '#fff', fontWeight: '700' },
-
   input: {
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
-
   suggestBox: {
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
     borderRadius: 12,
     marginTop: 8,
     overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: palette.border,
   },
   suggestRow: {
     paddingHorizontal: 14,
@@ -283,43 +334,47 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  suggestText: { fontWeight: '700' },
-  suggestMuted: { color: '#666' },
-
+  suggestText: { fontWeight: '700', color: palette.text },
+  suggestMuted: { color: palette.muted },
   section: { marginTop: 12 },
-  sectionTitle: { fontWeight: '700', marginBottom: 8 },
-
+  sectionTitle: { fontWeight: '700', marginBottom: 8, color: palette.greenDeep },
   chipRow: { gap: 8, paddingBottom: 4 },
   chip: {
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
-  chipText: { fontWeight: '600' },
-  chipActive: { backgroundColor: '#111' },
+  chipText: { fontWeight: '600', color: palette.text },
+  chipActive: { backgroundColor: palette.greenDeep, borderColor: palette.greenDeep },
   chipTextActive: { color: '#fff' },
-  chipDark: { backgroundColor: '#111' },
+  chipDark: { backgroundColor: palette.orange, borderColor: palette.orange },
   chipTextDark: { color: '#fff' },
-
   controlsRow: {
     marginTop: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  metaText: { color: '#666' },
+  metaText: { color: palette.muted },
+  buttonRow: { flexDirection: 'row', gap: 8 },
   smallBtn: {
-    backgroundColor: '#111',
+    backgroundColor: palette.orange,
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 10,
+    borderTopWidth: 1,
+    borderTopColor: palette.orangeSoft,
+    borderBottomWidth: 2,
+    borderBottomColor: palette.orangeDeep,
+    ...shadows.card,
   },
   smallBtnText: { color: '#fff', fontWeight: '700' },
-
   list: { paddingTop: 12, paddingBottom: 24 },
   row: {
-    backgroundColor: '#fff',
+    backgroundColor: palette.surface,
     borderRadius: 12,
     padding: 14,
     marginBottom: 10,
@@ -327,20 +382,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 10,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadows.card,
   },
-  itemName: { fontSize: 16, fontWeight: '700' },
-  itemCategory: { marginTop: 2, color: '#666' },
-
+  itemName: { fontSize: 16, fontWeight: '700', color: palette.text },
+  itemCategory: { marginTop: 2, color: palette.muted },
   addBtn: {
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderRadius: 10,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: '#EFE4D8',
   },
-  addBtnActive: { backgroundColor: '#111' },
-  addBtnText: { fontWeight: '700' },
+  addBtnActive: { backgroundColor: palette.orange },
+  addBtnText: { fontWeight: '700', color: palette.text },
   addBtnTextActive: { color: '#fff' },
-
   empty: { marginTop: 20, alignItems: 'center' },
-  emptyText: { color: '#666' },
-})
+  emptyText: { color: palette.muted },
+});

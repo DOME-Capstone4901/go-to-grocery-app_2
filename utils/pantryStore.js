@@ -29,6 +29,7 @@ export function addPantryItem(item) {
 
   pantryItems.push(newItem);
   save();
+  return newItem;
 }
 
 export function getPantryItems() {
