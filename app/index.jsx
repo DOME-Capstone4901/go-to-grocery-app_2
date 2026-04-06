@@ -7,7 +7,7 @@ import { getDaysUntilExpiration } from '../utils/expiration';
 import { isLowStock } from '../utils/lowStock';
 import { getPantrySuggestions } from '../utils/suggestions';
 import { getRecipeSuggestions } from '../utils/recipeAI';
-import { addToGroceryList } from '../utils/groceryStore';
+import { addToGroceryList, getGroceryList } from '../utils/groceryStore';
 import { scheduleExpirationAlerts } from '../utils/notifications';
 import { palette, shadows } from '../utils/theme';
 
@@ -17,8 +17,13 @@ export default function HomeScreen() {
   const [expiringSoonCount, setExpiringSoonCount] = useState(0);
   const [suggestions, setSuggestions] = useState([]);
   const [recipes, setRecipes] = useState([]);
+  const groceryNames = new Set(
+    getGroceryList()
+      .map(item => String(item?.name || '').toLowerCase().trim())
+      .filter(Boolean)
+  );
 
-  const refreshHome = useCallback(() => {
+  const refreshHome = useCallback(async (isActive = () => true) => {
     const items = getPantryItems();
 
     setPantryCount(items.length);
@@ -30,13 +35,23 @@ export default function HomeScreen() {
       }).length
     );
     setSuggestions(getPantrySuggestions(items));
-    setRecipes(getRecipeSuggestions());
+
+    const recipeSuggestions = await getRecipeSuggestions(items);
+    if (isActive()) {
+      setRecipes(recipeSuggestions);
+    }
+
     scheduleExpirationAlerts();
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      refreshHome();
+      let active = true;
+      refreshHome(() => active);
+
+      return () => {
+        active = false;
+      };
     }, [refreshHome])
   );
 
@@ -121,32 +136,65 @@ export default function HomeScreen() {
         <View style={styles.recipeBox}>
           <Text style={styles.sectionTitle}>Recipe Ideas</Text>
 
-          {recipes.map((recipe, index) => (
-            <View key={index} style={styles.recipeCard}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.recipeName}>{recipe.name}</Text>
+          {recipes.map((recipe, index) => {
+            const pendingItems = recipe.missing.filter(item =>
+              groceryNames.has(String(item).toLowerCase().trim())
+            );
+            const stillMissingItems = recipe.missing.filter(
+              item => !groceryNames.has(String(item).toLowerCase().trim())
+            );
+            const waitingOnPurchase =
+              !recipe.canCookNow &&
+              stillMissingItems.length === 0 &&
+              pendingItems.length > 0;
 
-                {recipe.canCookNow ? (
-                  <Text style={styles.readyText}>You can cook this now</Text>
-                ) : (
-                  <Text style={styles.missingText}>
-                    Missing: {recipe.missing.join(', ')}
-                  </Text>
+            return (
+              <View key={index} style={styles.recipeCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.recipeName}>{recipe.name}</Text>
+
+                  {recipe.canCookNow ? (
+                    <Text style={styles.readyText}>You can cook this now</Text>
+                  ) : waitingOnPurchase ? (
+                    <Text style={styles.pendingText}>
+                      Added to grocery list. Buy it and add to pantry.
+                    </Text>
+                  ) : (
+                    <Text style={styles.missingText}>
+                      Missing: {stillMissingItems.join(', ')}
+                    </Text>
+                  )}
+                </View>
+
+                {!recipe.canCookNow && stillMissingItems.length > 0 && (
+                  <TouchableOpacity
+                    style={styles.recipeButton}
+                    onPress={() => {
+                      stillMissingItems.forEach(item => addToGroceryList({ name: item }));
+                      refreshHome();
+                    }}
+                  >
+                    <Text style={styles.recipeButtonText}>Add Missing</Text>
+                  </TouchableOpacity>
                 )}
               </View>
+            );
+          })}
+        </View>
+      )}
 
-              {!recipe.canCookNow && (
-                <TouchableOpacity
-                  style={styles.recipeButton}
-                  onPress={() => {
-                    recipe.missing.forEach(item => addToGroceryList({ name: item }));
-                  }}
-                >
-                  <Text style={styles.recipeButtonText}>Add Missing</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ))}
+      {recipes.length === 0 && (
+        <View style={styles.recipeBox}>
+          <Text style={styles.sectionTitle}>Recipe Ideas</Text>
+          <Text style={styles.emptyRecipeText}>
+            Add more pantry items to unlock recipe suggestions.
+          </Text>
+          <TouchableOpacity
+            style={styles.recipeButton}
+            onPress={() => router.push('/recipes')}
+          >
+            <Text style={styles.recipeButtonText}>Open Recipes</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -183,6 +231,16 @@ export default function HomeScreen() {
       <TouchableOpacity style={styles.button} onPress={() => router.push('/scan')}>
         <View style={styles.buttonInner}>
           <Text style={styles.buttonText}>Scan Barcode</Text>
+          <Text style={styles.buttonArrow}>{'>'}</Text>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.button}
+        onPress={() => router.push('/recipes')}
+      >
+        <View style={styles.buttonInner}>
+          <Text style={styles.buttonText}>Recipe Page</Text>
           <Text style={styles.buttonArrow}>{'>'}</Text>
         </View>
       </TouchableOpacity>
@@ -372,6 +430,11 @@ const styles = StyleSheet.create({
     color: palette.peachDeep,
     marginTop: 4,
   },
+  pendingText: {
+    color: palette.muted,
+    marginTop: 4,
+    fontWeight: '600',
+  },
   recipeButton: {
     backgroundColor: palette.peachDeep,
     paddingVertical: 6,
@@ -386,6 +449,10 @@ const styles = StyleSheet.create({
   recipeButtonText: {
     color: '#fff',
     fontWeight: '600',
+  },
+  emptyRecipeText: {
+    color: palette.muted,
+    marginBottom: 12,
   },
   button: {
     width: '100%',
