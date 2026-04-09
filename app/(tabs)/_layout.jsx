@@ -22,7 +22,6 @@ export default function Layout() {
         },
       }}
     >
-      
       <Tabs.Screen
         name="MainPantryTab"
         options={{
@@ -79,7 +78,6 @@ export default function Layout() {
           href: null,
         }}
       />
-
     </Tabs>
   );
 }

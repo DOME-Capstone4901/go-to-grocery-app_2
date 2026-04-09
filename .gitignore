@@ -43,3 +43,8 @@ recipe-backend/.env
 
 expo-run.log
 expo-run.err.log
+# Claude Code
+.claude/
+
+# local scripts
+start-app.bat
