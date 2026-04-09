@@ -1,0 +1,10 @@
+[
+  { "id": "loc-1", "name": "Fresh Market Downtown", "zip": "10001", "city": "New York", "state": "NY" },
+  { "id": "loc-2", "name": "GreenLeaf Co-op", "zip": "90210", "city": "Beverly Hills", "state": "CA" },
+  { "id": "loc-3", "name": "Harbor Foods", "zip": "94102", "city": "San Francisco", "state": "CA" },
+  { "id": "loc-4", "name": "Midwest Pantry Outlet", "zip": "60601", "city": "Chicago", "state": "IL" },
+  { "id": "loc-5", "name": "Sunrise Grocery", "zip": "33101", "city": "Miami", "state": "FL" },
+  { "id": "loc-6", "name": "Maple Street Market", "zip": "02108", "city": "Boston", "state": "MA" },
+  { "id": "loc-7", "name": "Riverside Organics", "zip": "97201", "city": "Portland", "state": "OR" },
+  { "id": "loc-8", "name": "Plains Family Foods", "zip": "75201", "city": "Dallas", "state": "TX" }
+]

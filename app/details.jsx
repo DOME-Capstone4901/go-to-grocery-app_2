@@ -3,6 +3,8 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { getPantryItems, deletePantryItem } from '../utils/pantryStore';
 import { getDaysUntilExpiration } from '../utils/expiration';
+import { addToGroceryList } from '../utils/groceryStore';
+import { palette, shadows } from '../utils/theme';
 
 export default function Details() {
   const { id } = useLocalSearchParams();
@@ -46,6 +48,19 @@ export default function Details() {
 
       <Text style={styles.subtitle}>Date: {item.expirationDate}</Text>
 
+      <Pressable
+        style={styles.restockButton}
+        onPress={() => {
+          addToGroceryList({
+            name: item.name,
+            quantity: 1,
+          });
+          router.push('/groceryList');
+        }}
+      >
+        <Text style={styles.restockButtonText}>Add Back To Grocery List</Text>
+      </Pressable>
+
       {/* DELETE BUTTON */}
       <Pressable
         style={styles.deleteButton}
@@ -71,27 +86,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center', 
     alignItems: 'center', 
     padding: 20, 
-    backgroundColor: '#f5f5f5' 
+    backgroundColor: palette.bg,
   },
   title: { 
     fontSize: 28, 
     fontWeight: '700', 
-    marginBottom: 20 
+    marginBottom: 20,
+    color: palette.greenDeep,
   },
   subtitle: { 
     marginTop: 8, 
-    color: '#666', 
+    color: palette.muted,
     fontSize: 18 
   },
-  expired: { color: '#d32f2f', fontWeight: '700' },
-  soon: { color: '#f57c00', fontWeight: '700' },
+  expired: { color: palette.peachDeep, fontWeight: '700' },
+  soon: { color: palette.orange, fontWeight: '700' },
 
   deleteButton: {
-    marginTop: 30,
-    backgroundColor: '#d32f2f',
+    marginTop: 15,
+    backgroundColor: palette.peachDeep,
     paddingVertical: 12,
     paddingHorizontal: 18,
     borderRadius: 10,
+    ...shadows.card,
   },
   deleteButtonText: {
     color: '#fff',
@@ -99,12 +116,27 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
 
+  restockButton: {
+    marginTop: 30,
+    backgroundColor: palette.orange,
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+    ...shadows.card,
+  },
+  restockButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 16,
+  },
+
   button: { 
     marginTop: 15, 
-    backgroundColor: '#111', 
+    backgroundColor: palette.greenDeep,
     paddingVertical: 12, 
     paddingHorizontal: 18, 
-    borderRadius: 10 
+    borderRadius: 10,
+    ...shadows.card,
   },
   buttonText: { 
     color: '#fff', 

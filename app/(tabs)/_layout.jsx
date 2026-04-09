@@ -1,11 +1,27 @@
-<<<<<<< HEAD
 import { Tabs } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { palette } from '../../utils/theme';
 
 export default function Layout() {
   return (
-    <Tabs screenOptions={{ headerShown: false }}>
-      
+    <Tabs
+      screenOptions={{
+        headerShown: false,
+        tabBarActiveTintColor: palette.orange,
+        tabBarInactiveTintColor: palette.muted,
+        tabBarStyle: {
+          backgroundColor: palette.surface,
+          borderTopColor: palette.border,
+          height: 62,
+          paddingBottom: 8,
+          paddingTop: 6,
+        },
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: '600',
+        },
+      }}
+    >
       <Tabs.Screen
         name="MainPantryTab"
         options={{
@@ -36,68 +52,32 @@ export default function Layout() {
         }}
       />
 
-=======
-import { Tabs } from 'expo-router'
-import { Ionicons } from '@expo/vector-icons'
-
-export default function TabLayout() {
-  return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: '#27AE60',
-        tabBarInactiveTintColor: '#95A5A6',
-        tabBarStyle: {
-          backgroundColor: '#fff',
-          borderTopWidth: 1,
-          borderTopColor: '#E9ECEF',
-          paddingBottom: 4,
-          height: 60,
-        },
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: '600',
-        },
-      }}
-    >
       <Tabs.Screen
-        name="home"
+        name="recipes"
         options={{
-          title: 'Search',
+          title: 'Recipes',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="search" size={size} color={color} />
+            <Ionicons name="restaurant-outline" size={size} color={color} />
           ),
         }}
       />
->>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
+
       <Tabs.Screen
         name="scan"
         options={{
           title: 'Scan',
           tabBarIcon: ({ color, size }) => (
-<<<<<<< HEAD
             <Ionicons name="barcode-outline" size={size} color={color} />
           ),
         }}
       />
 
+      <Tabs.Screen
+        name="myPantry"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
-=======
-            <Ionicons name="scan" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="pantry"
-        options={{
-          title: 'Pantry',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="list" size={size} color={color} />
-          ),
-        }}
-      />
-    </Tabs>
-  )
->>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
 }

@@ -32,6 +32,7 @@ yarn-error.*
 
 # local env files
 .env*.local
+recipe-backend/.env
 
 # typescript
 *.tsbuildinfo
@@ -40,6 +41,8 @@ yarn-error.*
 /ios
 /android
 
+expo-run.log
+expo-run.err.log
 # Claude Code
 .claude/
 
