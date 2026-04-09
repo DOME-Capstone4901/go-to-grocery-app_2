@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -17,12 +17,28 @@ import {
   toggleGroceryItem,
   updateGroceryItem,
 } from '../utils/groceryStore';
+import {
+  findGroceryCatalogMatch,
+  formatMoney,
+} from '../data/storeInventory';
+import { US_GROCERY_PRODUCTS } from '../data/usGroceryCatalog';
 import { palette, shadows } from '../utils/theme';
 
 export default function GroceryList() {
   const [input, setInput] = useState('');
   const [groceryList, setGroceryList] = useState(getGroceryList());
   const [editingId, setEditingId] = useState(null);
+  const [viewMode, setViewMode] = useState('list'); // 'list' | 'catalog'
+
+  const catalogFiltered = useMemo(() => {
+    const q = input.trim().toLowerCase();
+    if (!q) return US_GROCERY_PRODUCTS;
+    return US_GROCERY_PRODUCTS.filter(p => {
+      const hay = `${p.name} ${p.category}`.toLowerCase();
+      if (hay.includes(q)) return true;
+      return p.name.toLowerCase().split(/\s+/).some(w => w.startsWith(q));
+    });
+  }, [input]);
 
   const refreshList = useCallback(() => {
     setGroceryList([...getGroceryList()]);
@@ -89,6 +105,11 @@ export default function GroceryList() {
     setInput('');
   };
 
+  const addFromCatalog = product => {
+    addToGroceryList({ name: product.name, quantity: 1, cheapestStore: null });
+    refreshList();
+  };
+
   const removeItem = id => {
     deleteGroceryItem(id);
     refreshList();
@@ -130,18 +151,46 @@ export default function GroceryList() {
     });
   };
 
-  const renderItem = ({ item }) => (
+  const renderItem = ({ item }) => {
+    const match = findGroceryCatalogMatch(item.name);
+    const qty = Math.max(1, Number(item.quantity) || 1);
+    const pw = match ? Number(match.prices.walmart) : null;
+    const pk = match ? Number(match.prices.kroger) : null;
+    const pa = match ? Number(match.prices.aldi) : null;
+    let cheapestLabel = '';
+    if (match && pw != null && pk != null && pa != null) {
+      const min = Math.min(pw, pk, pa);
+      const chain =
+        min === pa ? 'Aldi' : min === pk ? 'Kroger' : 'Walmart';
+      cheapestLabel = ` · Lowest: ${chain} ${formatMoney(min)}`;
+    }
+
+    return (
     <View style={[styles.card, item.checked && styles.checkedCard]}>
       <View style={styles.cardTopRow}>
         <View style={styles.itemTextArea}>
           <Text style={[styles.itemName, item.checked && styles.checkedText]}>
             {item.name}
           </Text>
-          <Text style={styles.itemSubText}>
-            {item.cheapestStore
-              ? `${item.cheapestStore.name} - $${item.cheapestStore.price}`
-              : 'Store info will appear later'}
-          </Text>
+          {match ? (
+            <>
+              <Text style={styles.catalogMatchNote} numberOfLines={2}>
+                Matched: {match.name}
+              </Text>
+              <Text style={styles.priceLine}>
+                {match.unit === 'lb' ? 'Est. per lb · ' : 'Est. each · '}
+                WM {formatMoney(pw)} · KR {formatMoney(pk)} · ALDI {formatMoney(pa)}
+                {cheapestLabel}
+              </Text>
+              <Text style={styles.priceLineQty}>
+                ×{qty} on list · ~{formatMoney(pw * qty)} · ~{formatMoney(pk * qty)} · ~{formatMoney(pa * qty)} total
+              </Text>
+            </>
+          ) : (
+            <Text style={styles.itemSubText}>
+              No catalog match — try names like Whole milk 1 gal or Bananas for demo prices.
+            </Text>
+          )}
         </View>
 
         <Pressable
@@ -201,6 +250,7 @@ export default function GroceryList() {
       </Pressable>
     </View>
   );
+  };
 
   return (
     <View style={styles.container}>
@@ -208,21 +258,48 @@ export default function GroceryList() {
       <View style={styles.decorBlobTwo} />
       <View style={styles.heroCard}>
         <Text style={styles.title}>Grocery List</Text>
-        <Text style={styles.subtitle}>Keep shopping simple with one smart list.</Text>
+        <Text style={styles.subtitle}>
+          Demo prices (Walmart · Kroger · Aldi) show when the name matches the in-app catalog.
+        </Text>
       </View>
 
       <View style={styles.inputPanel}>
+        <View style={styles.modeRow}>
+          <Pressable
+            style={[styles.modeChip, viewMode === 'list' && styles.modeChipOn]}
+            onPress={() => setViewMode('list')}
+          >
+            <Text style={[styles.modeChipText, viewMode === 'list' && styles.modeChipTextOn]}>
+              My list
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.modeChip, viewMode === 'catalog' && styles.modeChipOn]}
+            onPress={() => setViewMode('catalog')}
+          >
+            <Text style={[styles.modeChipText, viewMode === 'catalog' && styles.modeChipTextOn]}>
+              Browse all groceries
+            </Text>
+          </Pressable>
+        </View>
+
         <View style={styles.inputSection}>
           <TextInput
             style={styles.input}
-            placeholder="Type item (milk, rice, eggs...)"
+            placeholder={viewMode === 'catalog' ? 'Search catalog (milk, rice, bananas...)' : 'Type item (milk, rice, eggs...)'}
             value={input}
             onChangeText={setInput}
           />
 
-          <Pressable style={styles.addButton} onPress={addOrUpdateItem}>
-            <Text style={styles.addButtonText}>{editingId ? 'Save' : 'Add'}</Text>
-          </Pressable>
+          {viewMode === 'list' ? (
+            <Pressable style={styles.addButton} onPress={addOrUpdateItem}>
+              <Text style={styles.addButtonText}>{editingId ? 'Save' : 'Add'}</Text>
+            </Pressable>
+          ) : (
+            <Pressable style={[styles.addButton, styles.addButtonAlt]} onPress={() => setInput('')}>
+              <Text style={styles.addButtonText}>Clear</Text>
+            </Pressable>
+          )}
         </View>
 
         {editingId ? (
@@ -233,20 +310,50 @@ export default function GroceryList() {
       </View>
 
       <View style={styles.listPanel}>
-        <FlatList
-          data={groceryList}
-          keyExtractor={item => item.id}
-          renderItem={renderItem}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyTitle}>No items yet</Text>
-              <Text style={styles.emptySubtitle}>
-                Add your first grocery item above
-              </Text>
-            </View>
-          }
-        />
+        {viewMode === 'list' ? (
+          <FlatList
+            data={groceryList}
+            keyExtractor={item => item.id}
+            renderItem={renderItem}
+            contentContainerStyle={styles.listContent}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyTitle}>No items yet</Text>
+                <Text style={styles.emptySubtitle}>
+                  Add your first grocery item above, or switch to Browse all groceries.
+                </Text>
+              </View>
+            }
+          />
+        ) : (
+          <FlatList
+            data={catalogFiltered}
+            keyExtractor={item => item.id}
+            contentContainerStyle={styles.listContent}
+            renderItem={({ item }) => (
+              <View style={styles.catalogRow}>
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <Text style={styles.catalogName}>{item.name}</Text>
+                  <Text style={styles.catalogMeta}>{item.category} · {item.unit === 'lb' ? 'per lb' : 'each'}</Text>
+                  <Text style={styles.catalogPrice}>
+                    WM {formatMoney(item.prices.walmart)} · KR {formatMoney(item.prices.kroger)} · ALDI {formatMoney(item.prices.aldi)}
+                  </Text>
+                </View>
+                <Pressable style={styles.catalogAddBtn} onPress={() => addFromCatalog(item)}>
+                  <Text style={styles.catalogAddBtnText}>+ Add</Text>
+                </Pressable>
+              </View>
+            )}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyTitle}>No matches</Text>
+                <Text style={styles.emptySubtitle}>
+                  Try a different search (e.g. milk, rice, bananas).
+                </Text>
+              </View>
+            }
+          />
+        )}
       </View>
     </View>
   );
@@ -314,6 +421,31 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...shadows.card,
   },
+  modeRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  modeChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: palette.surface,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  modeChipOn: {
+    backgroundColor: palette.greenDeep,
+    borderColor: palette.greenDeep,
+  },
+  modeChipText: {
+    fontWeight: '700',
+    color: palette.text,
+    fontSize: 13,
+  },
+  modeChipTextOn: {
+    color: '#fff',
+  },
   inputSection: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -342,6 +474,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 3,
     borderBottomColor: palette.orangeDeep,
   },
+  addButtonAlt: {
+    backgroundColor: palette.greenDeep,
+    borderTopColor: '#5a8a4a',
+    borderBottomColor: '#2d4a24',
+  },
   addButtonText: {
     color: '#ffffff',
     fontWeight: '800',
@@ -367,6 +504,31 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.border,
   },
+  catalogRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadows.card,
+  },
+  catalogName: { fontSize: 16, fontWeight: '800', color: palette.text },
+  catalogMeta: { marginTop: 4, fontSize: 12, color: palette.muted },
+  catalogPrice: { marginTop: 6, fontSize: 13, fontWeight: '700', color: palette.greenDeep },
+  catalogAddBtn: {
+    backgroundColor: palette.orange,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 10,
+    borderTopWidth: 1,
+    borderTopColor: palette.orangeSoft,
+    borderBottomWidth: 2,
+    borderBottomColor: palette.orangeDeep,
+  },
+  catalogAddBtnText: { color: '#fff', fontWeight: '800' },
   card: {
     backgroundColor: palette.surface,
     borderRadius: 14,
@@ -403,6 +565,26 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: palette.muted,
     marginTop: 4,
+    lineHeight: 17,
+  },
+  catalogMatchNote: {
+    fontSize: 11,
+    color: palette.muted,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  priceLine: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: palette.greenDeep,
+    marginTop: 6,
+    lineHeight: 18,
+  },
+  priceLineQty: {
+    fontSize: 12,
+    color: palette.text,
+    marginTop: 4,
+    fontWeight: '600',
   },
   deleteButton: {
     backgroundColor: palette.peachDeep,

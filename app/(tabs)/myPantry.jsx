@@ -1,24 +1,39 @@
-import React from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useMemo } from 'react';
+import { View, Text, SectionList, TouchableOpacity, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 
-import { getDaysUntilExpiration } from '../../utils/expiration';
+import { getDaysUntilExpiration, parseExpirationDate } from '../../utils/expiration';
 import { isLowStock } from '../../utils/lowStock';
 import { deletePantryItem } from '../../utils/pantryStore';
 import { palette, shadows } from '../../utils/theme';
 
 export default function PantryFilter({ groupedItems }) {
 
-  // Normalize sections so data is ALWAYS an array
-  const sections = [
-    { title: 'Expired', data: groupedItems?.expired || [] },
-    { title: 'Expiring Soon', data: groupedItems?.soon || [] },
-    { title: 'This Week', data: groupedItems?.week || [] },
-    { title: 'This Month', data: groupedItems?.month || [] },
-    { title: 'Later', data: groupedItems?.later || [] },
-  ];
-  const hasItems = sections.some(section => section.data.length > 0);
+  const sections = useMemo(() => {
+    const raw = [
+      { title: 'Expired', data: groupedItems?.expired || [] },
+      { title: 'Expiring Soon', data: groupedItems?.soon || [] },
+      { title: 'This Week', data: groupedItems?.week || [] },
+      { title: 'This Month', data: groupedItems?.month || [] },
+      { title: 'Later', data: groupedItems?.later || [] },
+      { title: 'No expiry set', data: groupedItems?.nodate || [] },
+    ];
+    return raw.filter(s => s.data.length > 0);
+  }, [groupedItems]);
+
+  const totalListed = useMemo(
+    () =>
+      (groupedItems?.expired?.length || 0) +
+      (groupedItems?.soon?.length || 0) +
+      (groupedItems?.week?.length || 0) +
+      (groupedItems?.month?.length || 0) +
+      (groupedItems?.later?.length || 0) +
+      (groupedItems?.nodate?.length || 0),
+    [groupedItems]
+  );
+
+  const hasItems = sections.length > 0;
 
   const renderRightActions = (id) => (
     <TouchableOpacity
@@ -33,9 +48,12 @@ export default function PantryFilter({ groupedItems }) {
   );
 
   const renderItem = ({ item }) => {
+    const hasExpiry = Boolean(parseExpirationDate(item.expirationDate));
     const days = getDaysUntilExpiration(item.expirationDate);
-    const expired = days < 0;
-    const expiringSoon = days >= 0 && days <= 3;
+    const expired = hasExpiry && days < 0;
+    const expiringSoon = hasExpiry && days >= 0 && days <= 3;
+    const qty = Number(item.quantity);
+    const qtyLabel = Number.isFinite(qty) && qty > 0 ? qty : '—';
 
     return (
       <Swipeable renderRightActions={() => renderRightActions(item.id)}>
@@ -52,8 +70,11 @@ export default function PantryFilter({ groupedItems }) {
           </View>
 
           <Text style={styles.category}>{item.category}</Text>
+          <Text style={styles.qtyLine}>Quantity on hand: {qtyLabel}</Text>
 
-          {expired ? (
+          {!hasExpiry ? (
+            <Text style={styles.dateMuted}>No expiry date saved</Text>
+          ) : expired ? (
             <Text style={styles.expired}>Expired {Math.abs(days)} days ago</Text>
           ) : expiringSoon ? (
             <Text style={styles.soon}>Expires in {days} days</Text>
@@ -71,28 +92,24 @@ export default function PantryFilter({ groupedItems }) {
       <View style={styles.decorBlobTwo} />
       <View style={styles.heroCard}>
         <Text style={styles.heroTitle}>Pantry Overview</Text>
-        <Text style={styles.heroSubtitle}>Track freshness and restock at the right time.</Text>
+        <Text style={styles.heroSubtitle}>
+          {totalListed > 0
+            ? `${totalListed} item${totalListed === 1 ? '' : 's'} listed — track freshness and restock.`
+            : 'Track freshness and restock at the right time.'}
+        </Text>
       </View>
 
       <View style={styles.listPanel}>
         {hasItems ? (
-          <FlatList
-            data={sections}
-            keyExtractor={(section) => section.title}
-            contentContainerStyle={{ paddingBottom: 28 }}
-            renderItem={({ item: section }) => (
-              <View>
-                {/* Section Header */}
-                {section.data.length > 0 && (
-                  <Text style={styles.sectionHeader}>{section.title}</Text>
-                )}
-
-                {/* Items */}
-                {section.data.map((item) => (
-                  <View key={item.id}>{renderItem({ item })}</View>
-                ))}
-              </View>
+          <SectionList
+            sections={sections}
+            keyExtractor={item => item.id}
+            renderItem={renderItem}
+            renderSectionHeader={({ section: { title } }) => (
+              <Text style={styles.sectionHeader}>{title}</Text>
             )}
+            stickySectionHeadersEnabled={false}
+            contentContainerStyle={{ paddingBottom: 28 }}
           />
         ) : (
           <View style={styles.emptyState}>
@@ -196,6 +213,17 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 14,
     color: palette.muted,
+  },
+  qtyLine: {
+    marginTop: 6,
+    fontSize: 15,
+    fontWeight: '700',
+    color: palette.greenDeep,
+  },
+  dateMuted: {
+    marginTop: 6,
+    color: palette.muted,
+    fontStyle: 'italic',
   },
   lowStock: {
     color: palette.orange,
