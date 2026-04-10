@@ -1,36 +1,3 @@
-<<<<<<< HEAD
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, Modal, Pressable } from 'react-native';
-
-export default function Scan() {
-  const [visible, setVisible] = useState(true);
-
-  return (
-    <View style={styles.container}>
-      <Modal
-        visible={visible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.title}>Coming Soon</Text>
-            <Text style={styles.message}>
-              Barcode scanning will be available once the Dev Client is enabled.
-            </Text>
-
-            <Pressable style={styles.button} onPress={() => setVisible(false)}>
-              <Text style={styles.buttonText}>Okay</Text>
-            </Pressable>
-          </View>
-        </View>
-      </Modal>
-
-      <Text style={styles.placeholderText}>
-        Scan feature coming soon…
-      </Text>
-=======
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import React, { useState } from 'react';
 import {
@@ -79,13 +46,11 @@ export default function ScanTab() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
 
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.appName}>To Go Grocery</Text>
       </View>
 
       {scanning ? (
-        /* Camera View */
         <View style={styles.cameraContainer}>
           <CameraView
             style={styles.camera}
@@ -102,9 +67,7 @@ export default function ScanTab() {
           </TouchableOpacity>
         </View>
       ) : (
-        /* Main Content */
         <View style={styles.content}>
-          {/* Scanner Icon */}
           <View style={styles.scannerContainer}>
             <View style={styles.scannerIcon}>
               <Text style={styles.scannerText}>📱</Text>
@@ -115,7 +78,6 @@ export default function ScanTab() {
 
           <Text style={styles.screenTitle}>Smart Product Scan</Text>
 
-          {/* Rating Cards */}
           <View style={styles.ratingContainer}>
             <View style={styles.ratingCard}>
               <View style={[styles.ratingBadge, styles.healthyBadge]}>
@@ -142,7 +104,6 @@ export default function ScanTab() {
             </View>
           </View>
 
-          {/* Features List */}
           <View style={styles.featuresBox}>
             <Text style={styles.featuresTitle}>What we analyze:</Text>
             <View style={styles.featureItem}><Text style={styles.featureIcon}>🥦</Text><Text style={styles.featureText}>Nutritional value</Text></View>
@@ -154,7 +115,6 @@ export default function ScanTab() {
       )}
 
       {!scanning && (
-        /* Action Buttons */
         <View style={styles.navigationContainer}>
           <View style={styles.actionButtons}>
             <TouchableOpacity style={styles.scanButton} onPress={startScan}>
@@ -166,59 +126,11 @@ export default function ScanTab() {
           </View>
         </View>
       )}
->>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-<<<<<<< HEAD
-  container: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  placeholderText: {
-    fontSize: 18,
-    opacity: 0.5,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  modalBox: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 25,
-    width: '85%',
-    alignItems: 'center',
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: '700',
-    marginBottom: 10,
-  },
-  message: {
-    fontSize: 16,
-    textAlign: 'center',
-    marginBottom: 20,
-    opacity: 0.8,
-  },
-  button: {
-    backgroundColor: '#6C63FF',
-    paddingVertical: 10,
-    paddingHorizontal: 25,
-    borderRadius: 8,
-  },
-  buttonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-=======
   container: { flex: 1, backgroundColor: '#fff', paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0 },
   header: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20, paddingTop: 10, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   appName: { fontSize: 18, color: '#27AE60', fontWeight: 'bold' },
@@ -253,7 +165,6 @@ const styles = StyleSheet.create({
   scanButtonText: { fontSize: 16, color: '#fff', fontWeight: '600' },
   nextButton: { flex: 1, backgroundColor: '#27AE60', paddingVertical: 16, borderRadius: 12, alignItems: 'center', marginLeft: 10, elevation: 3 },
   nextButtonText: { fontSize: 16, color: '#fff', fontWeight: '600' },
-  // Camera styles
   cameraContainer: { flex: 1, position: 'relative' },
   camera: { flex: 1 },
   overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center' },
@@ -261,5 +172,4 @@ const styles = StyleSheet.create({
   overlayHint: { marginTop: 20, color: '#fff', fontSize: 16, fontWeight: '600', textShadowColor: 'rgba(0,0,0,0.8)', textShadowOffset: { width: 1, height: 1 }, textShadowRadius: 4 },
   cancelBtn: { position: 'absolute', bottom: 40, alignSelf: 'center', backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 30, paddingVertical: 14, borderRadius: 30 },
   cancelBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
->>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
 });

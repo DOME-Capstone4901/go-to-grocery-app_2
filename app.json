@@ -20,26 +20,19 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
-<<<<<<< HEAD
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.CAMERA"
       ],
       "package": "com.anonymous.self_app"
-=======
-      }
->>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-<<<<<<< HEAD
+      "expo-router",
       "expo-barcode-scanner"
-=======
-      "expo-router"
->>>>>>> 2bdb204334ae2a3572ce2e8344ea0252bf5e20c9
     ]
   }
 }
