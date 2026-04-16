@@ -1,5 +1,13 @@
-import React, { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 
 import { deletePantryItem, getPantryItems } from '../utils/pantryStore';
@@ -10,8 +18,12 @@ import { getRecipeSuggestions } from '../utils/recipeAI';
 import { addToGroceryList, getGroceryList } from '../utils/groceryStore';
 import { scheduleExpirationAlerts } from '../utils/notifications';
 import { palette, shadows } from '../utils/theme';
+import { supabase } from '../src/lib/supabase';
 
 export default function HomeScreen() {
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [pantryCount, setPantryCount] = useState(0);
   const [lowStockCount, setLowStockCount] = useState(0);
   const [expiringSoonCount, setExpiringSoonCount] = useState(0);
@@ -22,6 +34,49 @@ export default function HomeScreen() {
       .map(item => String(item?.name || '').toLowerCase().trim())
       .filter(Boolean)
   );
+
+  useEffect(() => {
+    let active = true;
+
+    const syncSession = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!active) return;
+
+      if (!session) {
+        setIsAuthenticated(false);
+        setSessionChecked(true);
+        router.replace('/login');
+        return;
+      }
+
+      setIsAuthenticated(true);
+      setSessionChecked(true);
+    };
+
+    syncSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+
+      const authenticated = Boolean(session);
+      setIsAuthenticated(authenticated);
+      setSessionChecked(true);
+
+      if (!authenticated) {
+        router.replace('/login');
+      }
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   const refreshHome = useCallback(async (isActive = () => true) => {
     const items = getPantryItems();
@@ -46,14 +101,49 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (!isAuthenticated) {
+        return undefined;
+      }
+
       let active = true;
       refreshHome(() => active);
 
       return () => {
         active = false;
       };
-    }, [refreshHome])
+    }, [isAuthenticated, refreshHome])
   );
+
+  const handleLogout = async () => {
+    if (loggingOut) return;
+
+    setLoggingOut(true);
+
+    try {
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        Alert.alert('Logout failed', error.message);
+        return;
+      }
+
+      router.replace('/login');
+    } finally {
+      setLoggingOut(false);
+    }
+  };
+
+  if (!sessionChecked) {
+    return (
+      <View style={styles.authGate}>
+        <ActivityIndicator size="large" color={palette.greenDeep} />
+      </View>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return null;
+  }
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -61,10 +151,26 @@ export default function HomeScreen() {
       <View style={styles.decorBlobTwo} />
       <View style={styles.decorRibbon} />
       <View style={styles.heroCard}>
-        <Text style={styles.title}>My Pantry App</Text>
-        <Text style={styles.heroSubtitle}>
-          Plan smarter shopping and keep your pantry fresh.
-        </Text>
+        <View style={styles.heroHeader}>
+          <View style={styles.heroCopy}>
+            <Text style={styles.title}>My Pantry App</Text>
+            <Text style={styles.heroSubtitle}>
+              Plan smarter shopping and keep your pantry fresh.
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.logoutButton, loggingOut && styles.logoutButtonDisabled]}
+            onPress={handleLogout}
+            disabled={loggingOut}
+          >
+            {loggingOut ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text style={styles.logoutButtonText}>Log Out</Text>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={styles.statsContainer}>
@@ -249,6 +355,12 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
+  authGate: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.bg,
+  },
   container: {
     padding: 25,
     backgroundColor: palette.bg,
@@ -301,13 +413,42 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.border,
     marginBottom: 20,
-    alignItems: 'center',
     ...shadows.card,
+  },
+  heroHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  heroCopy: {
+    flex: 1,
+    alignItems: 'center',
   },
   heroSubtitle: {
     marginTop: 6,
     color: palette.muted,
     fontSize: 15,
+    textAlign: 'center',
+  },
+  logoutButton: {
+    backgroundColor: palette.greenDeep,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: palette.green,
+    minWidth: 88,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoutButtonDisabled: {
+    opacity: 0.75,
+  },
+  logoutButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
   },
   statsContainer: {
     flexDirection: 'row',
