@@ -89,7 +89,7 @@ export default function Home() {
         <Pressable style={styles.cartPill} onPress={() => router.push({ pathname: '/details', params: { cartCount } })}>
           <Text style={styles.cartText}>List: {cartCount}</Text>
         </Pressable>
-        <Pressable style={styles.settingsBtn} onPress={() => router.push('/(screens)/LoginScreen')}>
+        <Pressable style={styles.settingsBtn} onPress={() => router.push('/login')}>
           <Text style={styles.settingsBtnText}>⚙️</Text>
         </Pressable>
       </View>
