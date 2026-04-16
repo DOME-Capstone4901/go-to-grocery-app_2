@@ -27,7 +27,8 @@ function shouldHideGlobalSearch(pathname) {
   if (
     pathname.includes('store-shop') ||
     pathname.includes('store-checkout') ||
-    pathname.includes('store-orders')
+    pathname.includes('store-orders') ||
+    pathname === '/login'
   ) {
     return true;
   }
