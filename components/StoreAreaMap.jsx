@@ -87,6 +87,31 @@ function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = fa
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   }
+  function escAttr(s) {
+    return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  /** Same rules as mapsDrivingDirectionsUrl (destination-only — for new-tab fallback). */
+  function buildGoogleDirectionsHref(s) {
+    try {
+      var lat = Number(s.lat), lng = Number(s.lng);
+      var pid = s.placeId != null ? String(s.placeId) : '';
+      var isDemo = pid.indexOf('demo-') === 0;
+      var sp = new URLSearchParams();
+      sp.set('api', '1');
+      sp.set('travelmode', 'driving');
+      if (pid && !isDemo && pid.length > 8) {
+        sp.set('destination', String(s.name || 'Store').slice(0, 200));
+        sp.set('destination_place_id', pid);
+      } else if (isFinite(lat) && isFinite(lng)) {
+        sp.set('destination', lat + ',' + lng);
+      } else {
+        sp.set('destination', String(s.name || 'Store'));
+      }
+      return 'https://www.google.com/maps/dir/?' + sp.toString();
+    } catch (e) {
+      return 'https://www.google.com/maps';
+    }
+  }
 
   window.__setStores = function(jsonStr) {
     try {
@@ -102,11 +127,22 @@ function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = fa
         var m = L.circleMarker([plat, plng], { radius: 10, fillColor: c, color: '#fff', weight: 2, fillOpacity: 0.95 });
         var addr = esc(s.address || 'Address from search');
         var dist = s.miles != null ? ('~' + s.miles + ' mi · ') : '';
-        var popupHtml = '<div style="font-size:12px;line-height:1.45;max-width:220px">' +
+        var dirHref = buildGoogleDirectionsHref(s);
+        var storeB64 = btoa(unescape(encodeURIComponent(JSON.stringify(s))));
+        var popupHtml = '<div style="font-size:12px;line-height:1.45;max-width:240px">' +
           '<b style="font-size:13px">' + esc(s.name || 'Store') + '</b><br/>' +
           '<span style="color:#333">' + esc(String(s.brand || '')) + '</span><br/>' +
           '<span style="color:#444">' + addr + '</span><br/>' +
-          '<span style="color:#666;font-size:11px">' + dist + plat.toFixed(4) + ', ' + plng.toFixed(4) + '</span></div>';
+          '<span style="color:#666;font-size:11px">' + dist + plat.toFixed(4) + ', ' + plng.toFixed(4) + '</span>' +
+          '<div style="margin-top:10px;padding-top:8px;border-top:1px solid #e0e0e0">' +
+          '<button type="button" class="store-map-dir-btn" data-b64="' + escAttr(storeB64) + '" ' +
+          'style="display:block;width:100%;padding:9px 10px;background:#0071ce;color:#fff;border:none;border-radius:8px;font-weight:800;font-size:12px;cursor:pointer;font-family:inherit">' +
+          'Directions</button>' +
+          '<a href="' + escAttr(dirHref) + '" target="_blank" rel="noopener noreferrer" ' +
+          'style="display:block;margin-top:8px;text-align:center;font-size:11px;color:#0071ce;font-weight:600;text-decoration:underline">' +
+          'Open in Google Maps (new tab)</a>' +
+          '<span style="display:block;margin-top:6px;font-size:10px;color:#888;line-height:1.35">Driving directions use Google Maps (same as Walmart store locator).</span>' +
+          '</div></div>';
         m.bindPopup(popupHtml);
         m.on('click', function() {
           var payload = JSON.stringify({ type: 'storeSelect', store: s });
@@ -131,6 +167,23 @@ function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = fa
     } catch (e) {}
   };
   ${storeListener}
+
+  map.getContainer().addEventListener('click', function(ev) {
+    var t = ev.target;
+    if (!t || !t.closest) return;
+    var btn = t.closest('.store-map-dir-btn');
+    if (!btn) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    var b64 = btn.getAttribute('data-b64');
+    if (!b64) return;
+    try {
+      var json = decodeURIComponent(escape(atob(b64)));
+      var st = JSON.parse(json);
+      var payload = JSON.stringify({ type: 'storeDirections', store: st });
+      ${postToHost}
+    } catch (err) {}
+  });
 
   var reportMoves = false;
   setTimeout(function() { reportMoves = true; }, 750);
@@ -168,6 +221,8 @@ export default function StoreAreaMap({
   onMapIdle,
   /** Fires when user taps a store pin (full store object from search results). */
   onStoreSelect,
+  /** Driving directions from pin popup (Google Maps — parent adds GPS origin when available). */
+  onStoreDirections,
   /** Double-click on map background: search stores at that point (US-only in parent). */
   onMapDoubleClick,
 }) {
@@ -228,6 +283,9 @@ export default function StoreAreaMap({
         if (msg.type === 'storeSelect' && msg.store && onStoreSelect) {
           onStoreSelect(msg.store);
         }
+        if (msg.type === 'storeDirections' && msg.store && onStoreDirections) {
+          onStoreDirections(msg.store);
+        }
         if (
           msg.type === 'mapDoubleClick' &&
           msg.lat != null &&
@@ -245,7 +303,7 @@ export default function StoreAreaMap({
       return () => window.removeEventListener('message', handler);
     }
     return undefined;
-  }, [useIframeMap, onMapIdle, onStoreSelect, onMapDoubleClick]);
+  }, [useIframeMap, onMapIdle, onStoreSelect, onStoreDirections, onMapDoubleClick]);
 
   if (!coordsValid) {
     return null;
@@ -269,10 +327,8 @@ export default function StoreAreaMap({
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.title}>Map — drag to explore</Text>
-      <Text style={styles.hint}>
-        Double-click anywhere to load stores there, or pan and release. Tap a pin for details.
-      </Text>
+      <Text style={styles.title}>Map</Text>
+      <Text style={styles.hint}>Pan, double-click, or tap a pin.</Text>
       {subtitle ? (
         <Text style={styles.subtitle} numberOfLines={2}>
           {subtitle}
@@ -293,7 +349,7 @@ export default function StoreAreaMap({
             borderStyle: 'solid',
             backgroundColor: '#dfe5e0',
           }}
-          sandbox="allow-scripts allow-same-origin"
+          sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
           onLoad={pushMarkersToWeb}
         />
       ) : NativeWebView ? (
@@ -316,6 +372,9 @@ export default function StoreAreaMap({
               if (msg.type === 'storeSelect' && msg.store && onStoreSelect) {
                 onStoreSelect(msg.store);
               }
+              if (msg.type === 'storeDirections' && msg.store && onStoreDirections) {
+                onStoreDirections(msg.store);
+              }
               if (
                 msg.type === 'mapDoubleClick' &&
                 msg.lat != null &&
@@ -333,14 +392,6 @@ export default function StoreAreaMap({
       ) : null}
 
       <View style={styles.pinFooter}>
-        <Text style={styles.pinFooterTitle}>Store pins on the map</Text>
-        <Text style={styles.pinFooterLine}>
-          Each dot uses the latitude & longitude returned by the store API (recipe-backend / Google Places
-          when configured).
-          {autoFitStores
-            ? ' The map recenters to fit every pin after each search.'
-            : ' The map view stays where you leave it when pins update — pan and zoom yourself.'}
-        </Text>
         <View style={styles.legendRow}>
           <View style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.walmart }]} />
@@ -355,9 +406,6 @@ export default function StoreAreaMap({
             <Text style={styles.legendText}>Aldi ({pinCounts.aldi})</Text>
           </View>
         </View>
-        <Text style={styles.pinFooterMuted}>
-          {stores.length} location{stores.length === 1 ? '' : 's'} plotted — same results as the list below.
-        </Text>
       </View>
     </View>
   );
@@ -407,23 +455,10 @@ const styles = StyleSheet.create({
     borderTopColor: palette.border,
     backgroundColor: palette.surfaceAlt,
   },
-  pinFooterTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: palette.greenDeep,
-    marginBottom: 6,
-  },
-  pinFooterLine: {
-    fontSize: 11,
-    color: palette.muted,
-    lineHeight: 16,
-    marginBottom: 10,
-  },
   legendRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 14,
-    marginBottom: 8,
   },
   legendItem: {
     flexDirection: 'row',
@@ -441,10 +476,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: palette.text,
-  },
-  pinFooterMuted: {
-    fontSize: 11,
-    color: palette.muted,
-    lineHeight: 15,
   },
 });

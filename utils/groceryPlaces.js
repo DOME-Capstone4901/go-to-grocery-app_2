@@ -2,12 +2,20 @@ import { filterStoresToUnitedStates } from './usBounds';
 
 const zipcodes = require('zipcodes');
 
+/** Match server stripLeadingChainQuery — "Kroger 90210" → "90210" for local ZIP lookup. */
+function stripLeadingChainQuery(raw) {
+  const t = String(raw || '').trim();
+  if (/^\s*(walmart|kroger|aldi)\s*$/i.test(t)) return '';
+  const m = t.match(/^\s*(walmart|kroger|aldi)\s+(.+)$/i);
+  return m ? m[2].trim() : t;
+}
+
 /**
  * Resolve US city+state or ZIP to coordinates using the bundled `zipcodes` DB (no Google call).
  * Returns null if the user should be geocoded on the server (e.g. street address or city-only).
  */
 export function resolveSearchToLocation(raw) {
-  const q = raw.trim();
+  const q = stripLeadingChainQuery(raw).trim();
   if (!q) return null;
 
   const digits = q.replace(/\D/g, '');
@@ -103,8 +111,35 @@ function getApiBaseCandidates() {
 }
 
 /**
- * Loads Walmart, Kroger, and Aldi near a point via the recipe backend (Google Places Nearby Search).
- * Google Cloud billing applies; many projects get $200/mo credit — not unlimited “free.”
+ * US location autocomplete (Nominatim via recipe-backend). Debounce on the caller; Nominatim ~1 req/s fair use.
+ */
+export async function fetchGeocodeSuggestions(text) {
+  const q = String(text ?? '').trim();
+  if (q.length < 2) {
+    return [];
+  }
+  const candidates = getApiBaseCandidates();
+  let lastErr;
+  for (const apiBase of candidates) {
+    const url = `${apiBase}/places/geocode-suggest?q=${encodeURIComponent(q)}`;
+    try {
+      const res = await fetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) continue;
+      const rows = Array.isArray(data.suggestions) ? data.suggestions : [];
+      return rows;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  void lastErr;
+  return [];
+}
+
+/**
+ * Loads Walmart, Kroger, and Aldi near a point via the recipe backend.
+ * - With GOOGLE_MAPS_API_KEY: Google Places Nearby Search (billing may apply).
+ * - Without it: free OpenStreetMap Overpass + Nominatim geocoding (coverage varies by OSM data).
  */
 export async function fetchGroceryChainStores(params = {}) {
   const { lat, lng, query } = params;
@@ -188,7 +223,8 @@ export function mapsDrivingDirectionsUrl({
   } else if (Number.isFinite(dLat) && Number.isFinite(dLng)) {
     params.set('destination', `${dLat},${dLng}`);
   } else {
-    params.set('destination', String(name || 'Store'));
+    /** Free-text destination (store name + address); Google Maps geocodes it. */
+    params.set('destination', String(name || 'Store').slice(0, 200));
   }
 
   const oLa = Number(originLat);

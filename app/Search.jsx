@@ -16,16 +16,13 @@ import { addToGroceryList, getGroceryList } from '../utils/groceryStore';
 import StoreAreaMap from '../components/StoreAreaMap';
 import StoreLocationDetail from '../components/StoreLocationDetail';
 import {
+  fetchGeocodeSuggestions,
   fetchGroceryChainStores,
   mapsDrivingDirectionsUrl,
   mapsUrlForPlace,
   resolveSearchToLocation,
 } from '../utils/groceryPlaces';
 import { isLatLngInsideUnitedStates } from '../utils/usBounds';
-import {
-  APPROX_US_STORE_TOTALS,
-  APPROX_US_STORE_TOTALS_FOOTNOTE,
-} from '../utils/usChainStoreTotals';
 import {
   GROCERY_CATALOG,
   filterGroceryByQuery,
@@ -68,14 +65,12 @@ const DEFAULT_STORE_MAP_CENTER = { lat: 39.8283, lng: -98.5795 };
  * Texas & New York metro shortcuts. Each tap runs one nearby search — pan the map or pick
  * another city for more stores (APIs return a radius, not every store in a state).
  */
-const STORE_FINDER_REGION_PRESETS = [
-  { id: 'tx-hou', label: 'Houston, TX', placeQuery: 'Houston, TX' },
-  { id: 'tx-dal', label: 'Dallas, TX', placeQuery: 'Dallas, TX' },
-  { id: 'tx-aus', label: 'Austin, TX', placeQuery: 'Austin, TX' },
-  { id: 'tx-sat', label: 'San Antonio, TX', placeQuery: 'San Antonio, TX' },
-  { id: 'ny-nyc', label: 'New York, NY', placeQuery: 'New York, NY' },
-  { id: 'ny-buf', label: 'Buffalo, NY', placeQuery: 'Buffalo, NY' },
-  { id: 'ny-alb', label: 'Albany, NY', placeQuery: 'Albany, NY' },
+/** Walmart, Kroger, Aldi — matches backend GROCERY_BRANDS. */
+const STORE_CHAIN_FILTERS = [
+  { id: null, label: 'All chains' },
+  { id: 'walmart', label: 'Walmart' },
+  { id: 'kroger', label: 'Kroger' },
+  { id: 'aldi', label: 'Aldi' },
 ];
 
 export default function SearchScreen() {
@@ -102,8 +97,11 @@ export default function SearchScreen() {
   const [sortAZ, setSortAZ] = useState(true);
   const [addedIds, setAddedIds] = useState([]);
   const [listCountsTick, setListCountsTick] = useState(0);
-  /** Narrows the store list below (does not change the area search or map pins). */
-  const [storeListFilter, setStoreListFilter] = useState('');
+  /** null = all three chains; otherwise show only that brand on map + list. */
+  const [storeBrandFilter, setStoreBrandFilter] = useState(null);
+  /** Nominatim location rows from GET /places/geocode-suggest (while typing). */
+  const [geocodeApiSuggestions, setGeocodeApiSuggestions] = useState([]);
+  const geocodeSuggestSeq = useRef(0);
 
   useFocusEffect(
     useCallback(() => {
@@ -123,7 +121,7 @@ export default function SearchScreen() {
     setSearchMode(mode === 'places' ? 'places' : 'grocery');
   }, [params.q, params.mode]);
 
-  /** When Store finder opens with no text query: use GPS, then nearest stores for that point. */
+  /** When Store finder opens with no text query: use GPS, then nearest stores; always fall back to central US so the API still returns pins. */
   useEffect(() => {
     if (searchMode !== 'places') return undefined;
     const q = placeQuery.trim();
@@ -136,43 +134,64 @@ export default function SearchScreen() {
       setPlaceLoading(true);
       setPlacesError(null);
       try {
+        const applyStoreResponse = data => {
+          setGroceryStores(data.stores || []);
+          setStoreMapCenter({
+            lat: Number(data.lat),
+            lng: Number(data.lng),
+          });
+          lastMapExploreRef.current = {
+            lat: Number(data.lat),
+            lng: Number(data.lng),
+          };
+          setStoreDemoMode(Boolean(data.demo));
+          setMapEpoch(e => e + 1);
+        };
+
         const geo = await getUserLatLng();
         if (cancelled || seq !== nearMeSeqRef.current) return;
+
         if (!geo.ok) {
-          setAreaLabel('Location off — search by ZIP/city or pan the map.');
           setUserRouteOrigin(null);
-          setPlaceLoading(false);
+          const data = await fetchGroceryChainStores({
+            lat: DEFAULT_STORE_MAP_CENTER.lat,
+            lng: DEFAULT_STORE_MAP_CENTER.lng,
+          });
+          if (cancelled || seq !== nearMeSeqRef.current) return;
+          applyStoreResponse(data);
+          setAreaLabel(
+            'Location permission off — showing stores near central US. Type a US ZIP or city to search elsewhere.'
+          );
+          setPlacesError(null);
           return;
         }
+
         const { lat, lng } = geo;
         setUserRouteOrigin({ lat, lng });
         setStoreMapCenter({ lat, lng });
         lastMapExploreRef.current = { lat, lng };
+
         if (!isLatLngInsideUnitedStates(lat, lng)) {
-          setPlacesError(
-            'Store finder is limited to the United States. Move the map to the US or enter a US ZIP or city.'
+          const data = await fetchGroceryChainStores({
+            lat: DEFAULT_STORE_MAP_CENTER.lat,
+            lng: DEFAULT_STORE_MAP_CENTER.lng,
+          });
+          if (cancelled || seq !== nearMeSeqRef.current) return;
+          applyStoreResponse(data);
+          setAreaLabel(
+            'Your position is outside the US — sample results near central US. Enter a US ZIP or city for a local search.'
           );
-          setGroceryStores([]);
-          setAreaLabel('');
-          setPlaceLoading(false);
+          setPlacesError(null);
           return;
         }
+
         const data = await fetchGroceryChainStores({ lat, lng });
         if (cancelled || seq !== nearMeSeqRef.current) return;
-        setGroceryStores(data.stores || []);
+        applyStoreResponse(data);
         setAreaLabel(
           data.locationLabel || `Near you · ${Number(lat).toFixed(2)}, ${Number(lng).toFixed(2)}`
         );
-        setStoreMapCenter({
-          lat: Number(data.lat),
-          lng: Number(data.lng),
-        });
-        lastMapExploreRef.current = {
-          lat: Number(data.lat),
-          lng: Number(data.lng),
-        };
-        setStoreDemoMode(Boolean(data.demo));
-        setMapEpoch(e => e + 1);
+        setPlacesError(null);
       } catch (e) {
         if (cancelled || seq !== nearMeSeqRef.current) return;
         setPlacesError(e?.message || String(e));
@@ -190,10 +209,49 @@ export default function SearchScreen() {
     };
   }, [searchMode, placeQuery]);
 
+  /** Avoid "Walmart only" with 0 rows when the real issue is no API data yet. */
+  useEffect(() => {
+    if (placeLoading) return;
+    if (groceryStores.length === 0) {
+      setStoreBrandFilter(null);
+    }
+  }, [placeLoading, groceryStores.length]);
+
+  /** Location autocomplete (free Nominatim via backend) — keep debounce ≥ ~300ms for fair use. */
+  useEffect(() => {
+    const q = placeQuery.trim();
+    const seq = ++geocodeSuggestSeq.current;
+    if (q.length < 2) {
+      setGeocodeApiSuggestions([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const rows = await fetchGeocodeSuggestions(q);
+        if (cancelled || seq !== geocodeSuggestSeq.current) return;
+        setGeocodeApiSuggestions(rows);
+      } catch {
+        if (!cancelled && seq === geocodeSuggestSeq.current) {
+          setGeocodeApiSuggestions([]);
+        }
+      }
+    }, 320);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [placeQuery]);
+
+  /** Load stores for the typed area — runs while typing (debounced). */
   useEffect(() => {
     const seq = ++placeSearchSeq.current;
     const q = placeQuery.trim();
     if (!q) {
+      return;
+    }
+    const isZipTyping = /^\d{1,5}$/.test(q);
+    if (q.length < 2 && !isZipTyping) {
       return;
     }
     let cancelled = false;
@@ -232,7 +290,7 @@ export default function SearchScreen() {
           setPlaceLoading(false);
         }
       }
-    }, 400);
+    }, 280);
     return () => {
       cancelled = true;
       clearTimeout(handle);
@@ -324,6 +382,30 @@ export default function SearchScreen() {
     return searchUsZipCodes(raw).slice(0, 8);
   }, [placeQuery]);
 
+  /** Single suggestion list: places (API) + ZIP (local). */
+  const unifiedSuggestions = useMemo(() => {
+    const geo = geocodeApiSuggestions.slice(0, 6).map(row => ({
+      kind: 'geo',
+      id: `g-${row.id}`,
+      title: row.label,
+      row,
+    }));
+    const zip = placeSuggestions.slice(0, 6).map(row => ({
+      kind: 'zip',
+      id: `z-${row.id}`,
+      title: `${row.city}, ${row.state} ${row.zip}`,
+      row,
+    }));
+    return [...geo, ...zip].slice(0, 8);
+  }, [geocodeApiSuggestions, placeSuggestions]);
+
+  /** Results limited to Walmart / Kroger / Aldi when a chain chip is selected. */
+  const storesInBrandScope = useMemo(() => {
+    const all = [...(groceryStores || [])];
+    if (!storeBrandFilter) return all;
+    return all.filter(s => String(s.brand || '').toLowerCase() === storeBrandFilter);
+  }, [groceryStores, storeBrandFilter]);
+
   const groceryCount = getGroceryList().length;
   void listCountsTick;
   const storeCartCount = getStoreCartCount();
@@ -333,7 +415,7 @@ export default function SearchScreen() {
 
   /** Alphabetical by street address (fallback: name), then distance as tie-breaker. */
   const storesListedByLocation = useMemo(() => {
-    const list = [...(groceryStores || [])];
+    const list = [...storesInBrandScope];
     list.sort((a, b) => {
       const cmp = storeLocationSortKey(a).localeCompare(storeLocationSortKey(b), undefined, {
         sensitivity: 'base',
@@ -344,19 +426,7 @@ export default function SearchScreen() {
       return ma - mb;
     });
     return list;
-  }, [groceryStores]);
-
-  const storeListFilterNorm = storeListFilter.trim().toLowerCase();
-
-  const storesFilteredForList = useMemo(() => {
-    if (!storeListFilterNorm) return storesListedByLocation;
-    return storesListedByLocation.filter(s => {
-      const blob = [s.name, s.address, s.brand]
-        .map(x => String(x ?? '').toLowerCase())
-        .join(' ');
-      return blob.includes(storeListFilterNorm);
-    });
-  }, [storesListedByLocation, storeListFilterNorm]);
+  }, [storesInBrandScope]);
 
   const brandCountsInArea = useMemo(() => {
     const counts = { walmart: 0, kroger: 0, aldi: 0 };
@@ -376,6 +446,12 @@ export default function SearchScreen() {
       setSelectedStore(null);
     }
   }, [groceryStores, selectedStore]);
+
+  useEffect(() => {
+    if (!selectedStore || !storeBrandFilter) return;
+    const b = String(selectedStore.brand || '').toLowerCase();
+    if (b !== storeBrandFilter) setSelectedStore(null);
+  }, [storeBrandFilter, selectedStore]);
 
   const handleMapStoreSelect = useCallback(store => {
     if (!store) return;
@@ -415,6 +491,35 @@ export default function SearchScreen() {
     [userRouteOrigin]
   );
 
+  /** Opens Google Maps with driving directions to free-text query (store name + address). */
+  const openDirectionsFromPlaceQuery = useCallback(async () => {
+    const q = placeQuery.trim();
+    if (!q) {
+      Alert.alert('Enter a place', 'Type a store name and address, then tap Directions.');
+      return;
+    }
+    Keyboard.dismiss();
+    let oLat = userRouteOrigin?.lat;
+    let oLng = userRouteOrigin?.lng;
+    if (oLat == null || oLng == null) {
+      const g = await getUserLatLng();
+      if (g.ok) {
+        oLat = g.lat;
+        oLng = g.lng;
+        setUserRouteOrigin({ lat: g.lat, lng: g.lng });
+      }
+    }
+    const url = mapsDrivingDirectionsUrl({
+      originLat: oLat,
+      originLng: oLng,
+      destLat: undefined,
+      destLng: undefined,
+      placeId: undefined,
+      name: q,
+    });
+    Linking.openURL(url).catch(() => {});
+  }, [placeQuery, userRouteOrigin]);
+
   const addItemToList = item => {
     const alreadyExists = getGroceryList().some(
       entry => entry.name.toLowerCase() === item.name.toLowerCase()
@@ -439,12 +544,12 @@ export default function SearchScreen() {
       <View style={styles.headerRow}>
         <View style={{ flex: 1, paddingRight: 8 }}>
           <Text style={styles.title}>
-            {searchMode === 'grocery' ? 'Grocery Search' : 'Walmart · Kroger · Aldi'}
+            {searchMode === 'grocery' ? 'Grocery Search' : 'Store finder'}
           </Text>
           <Text style={styles.subtitle}>
             {searchMode === 'grocery'
               ? 'Find items fast and add them to your list'
-              : 'US stores only. We use your location for nearby results and for Directions. Backend: Google Places (optional API key).'}
+              : 'Walmart, Kroger, Aldi — US only'}
           </Text>
         </View>
 
@@ -637,7 +742,7 @@ export default function SearchScreen() {
       ) : (
         <FlatList
           style={{ flex: 1 }}
-          data={storesFilteredForList}
+          data={storesListedByLocation}
           keyExtractor={(item, index) => storeRowKey(item, index)}
           contentContainerStyle={styles.storeFinderListContent}
           keyboardShouldPersistTaps="handled"
@@ -648,70 +753,104 @@ export default function SearchScreen() {
                 <TextInput
                   value={placeQuery}
                   onChangeText={setPlaceQuery}
-                  placeholder="Search area — ZIP, city, address…"
+                  placeholder="Store name, street, city…"
                   placeholderTextColor="#888"
                   style={[styles.input, styles.inputFlex]}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  returnKeyType="search"
-                  onSubmitEditing={() => Keyboard.dismiss()}
+                  returnKeyType="go"
+                  onSubmitEditing={() => {
+                    void openDirectionsFromPlaceQuery();
+                  }}
                 />
                 <Pressable
                   style={styles.searchGoBtn}
                   onPress={() => {
+                    void openDirectionsFromPlaceQuery();
+                  }}
+                >
+                  <Text style={styles.searchGoBtnText}>Directions</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.smallBtn}
+                  onPress={() => {
+                    setPlaceQuery('');
+                    setGroceryStores([]);
+                    setAreaLabel('');
+                    setPlacesError(null);
+                    setStoreMapCenter(DEFAULT_STORE_MAP_CENTER);
+                    setStoreDemoMode(false);
+                    lastMapExploreRef.current = null;
+                    mapExploreSeq.current += 1;
+                    nearMeSeqRef.current += 1;
+                    setMapEpoch(e => e + 1);
+                    setUserRouteOrigin(null);
+                    setSelectedStore(null);
+                    setStoreBrandFilter(null);
+                    setGeocodeApiSuggestions([]);
                     Keyboard.dismiss();
                   }}
                 >
-                  <Text style={styles.searchGoBtnText}>Search</Text>
+                  <Text style={styles.smallBtnText}>Clear</Text>
                 </Pressable>
               </View>
 
-              {placeSuggestions.length > 0 && (
+              {unifiedSuggestions.length > 0 ? (
                 <View style={styles.suggestBox}>
-                  <Text style={styles.suggestHeader}>Suggestions (ZIP / city)</Text>
-                  {placeSuggestions.map(row => (
+                  <Text style={styles.suggestHeader}>Suggestions</Text>
+                  {unifiedSuggestions.map(sug => (
                     <Pressable
-                      key={row.id}
+                      key={sug.id}
                       style={styles.suggestRow}
                       onPress={() => {
-                        setPlaceQuery(`${row.city}, ${row.state}`);
+                        if (sug.kind === 'geo') {
+                          setPlaceQuery(sug.row.label);
+                          setGeocodeApiSuggestions([]);
+                        } else {
+                          setPlaceQuery(`${sug.row.city}, ${sug.row.state}`);
+                        }
                         Keyboard.dismiss();
                       }}
                     >
-                      <Text style={styles.suggestText}>
-                        {row.city}, {row.state} {row.zip}
+                      <Text style={styles.suggestText} numberOfLines={2}>
+                        {sug.title}
                       </Text>
-                      <Text style={styles.suggestMuted}>Tap to search</Text>
+                      <Text style={styles.suggestMuted}>
+                        {sug.kind === 'geo' ? 'Place' : 'ZIP'}
+                      </Text>
                     </Pressable>
                   ))}
                 </View>
-              )}
+              ) : null}
 
-              <View style={styles.regionPresetBlock}>
-                <Text style={styles.regionPresetTitle}>Texas and New York</Text>
-                <Text style={styles.regionPresetHint}>
-                  Tap a city to load stores there, then open the list below or tap a map pin. Each
-                  search covers one area — pan the map or pick another city for more locations.
-                </Text>
+              <Text style={styles.storeMetaLine}>
+                {placeLoading
+                  ? 'Loading…'
+                  : `${groceryStores.length} nearby · WM ${brandCountsInArea.walmart} · KR ${brandCountsInArea.kroger} · ALDI ${brandCountsInArea.aldi}`}
+              </Text>
+
+              <View style={styles.brandFilterBlock}>
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.regionChipRow}
+                  contentContainerStyle={styles.brandFilterChipRow}
                 >
-                  {STORE_FINDER_REGION_PRESETS.map(p => {
-                    const active = placeQuery.trim() === p.placeQuery;
+                  {STORE_CHAIN_FILTERS.map(ch => {
+                    const active =
+                      ch.id === null ? storeBrandFilter == null : storeBrandFilter === ch.id;
                     return (
                       <Pressable
-                        key={p.id}
-                        style={[styles.regionChip, active && styles.regionChipOn]}
+                        key={String(ch.id ?? 'all')}
+                        style={[styles.brandFilterChip, active && styles.brandFilterChipOn]}
                         onPress={() => {
-                          Keyboard.dismiss();
+                          setStoreBrandFilter(ch.id);
                           setSelectedStore(null);
-                          setPlaceQuery(p.placeQuery);
                         }}
                       >
-                        <Text style={[styles.regionChipText, active && styles.regionChipTextOn]}>
-                          {p.label}
+                        <Text
+                          style={[styles.brandFilterChipText, active && styles.brandFilterChipTextOn]}
+                        >
+                          {ch.label}
                         </Text>
                       </Pressable>
                     );
@@ -723,17 +862,15 @@ export default function SearchScreen() {
                 lat={mapCenterForView.lat}
                 lng={mapCenterForView.lng}
                 autoFitStores={false}
-                subtitle={
-                  areaLabel ||
-                  (placeQuery.trim()
-                    ? undefined
-                    : 'Pan or zoom the map, then release — or type a ZIP / city below.')
-                }
-                stores={groceryStores}
+                subtitle={areaLabel || undefined}
+                stores={storesInBrandScope}
                 mapKey={mapAnchorKey}
                 onMapIdle={exploreFromMapCenter}
                 onMapDoubleClick={handleMapDoubleClick}
                 onStoreSelect={handleMapStoreSelect}
+                onStoreDirections={store => {
+                  void openDrivingDirections(store);
+                }}
               />
 
               {selectedStore ? (
@@ -768,77 +905,9 @@ export default function SearchScreen() {
                 />
               ) : null}
 
-              {areaLabel ? (
-                <Text style={styles.areaHint} numberOfLines={2}>
-                  Area: {areaLabel}
-                </Text>
-              ) : null}
-
               {placesError ? (
                 <Text style={styles.errorText}>{placesError}</Text>
               ) : null}
-
-              <View style={styles.usNationwideBox}>
-                <Text style={styles.usNationwideTitle}>U.S. (approx. total locations)</Text>
-                <Text style={styles.usNationwideLine}>
-                  Walmart ~{APPROX_US_STORE_TOTALS.walmart.toLocaleString()} · Kroger ~
-                  {APPROX_US_STORE_TOTALS.kroger.toLocaleString()} · Aldi ~
-                  {APPROX_US_STORE_TOTALS.aldi.toLocaleString()}
-                </Text>
-                <Text style={styles.usNationwideFoot}>{APPROX_US_STORE_TOTALS_FOOTNOTE}</Text>
-              </View>
-
-              <View style={styles.controlsRow}>
-                <Text style={styles.metaText}>
-                  {placeLoading
-                    ? 'Loading stores…'
-                    : `${groceryStores.length} in this area — Walmart ${brandCountsInArea.walmart}, Kroger ${brandCountsInArea.kroger}, Aldi ${brandCountsInArea.aldi}`}
-                </Text>
-                <Pressable
-                  style={styles.smallBtn}
-                  onPress={() => {
-                    setPlaceQuery('');
-                    setGroceryStores([]);
-                    setAreaLabel('');
-                    setPlacesError(null);
-                    setStoreMapCenter(DEFAULT_STORE_MAP_CENTER);
-                    setStoreDemoMode(false);
-                    lastMapExploreRef.current = null;
-                    mapExploreSeq.current += 1;
-                    nearMeSeqRef.current += 1;
-                    setMapEpoch(e => e + 1);
-                    setUserRouteOrigin(null);
-                    setSelectedStore(null);
-                    setStoreListFilter('');
-                  }}
-                >
-                  <Text style={styles.smallBtnText}>Clear</Text>
-                </Pressable>
-              </View>
-
-              {storeDemoMode ? (
-                <Text style={styles.demoBanner}>
-                  Demo mode: pins are placeholders. Add GOOGLE_MAPS_API_KEY to recipe-backend/.env for real
-                  Walmart / Kroger / Aldi from Google Places.
-                </Text>
-              ) : null}
-
-              <Text style={styles.storeListSectionTitle}>Stores by location (A–Z)</Text>
-              <Text style={styles.storeListSectionSub}>
-                {storeListFilterNorm
-                  ? `Showing ${storesFilteredForList.length} of ${groceryStores.length} — filter matches name, brand, or address`
-                  : `${groceryStores.length} in this area — type below to filter the list`}
-              </Text>
-              <TextInput
-                value={storeListFilter}
-                onChangeText={setStoreListFilter}
-                placeholder="Filter list — name, brand, street…"
-                placeholderTextColor="#888"
-                style={[styles.input, styles.storeListFilterInput]}
-                autoCapitalize="none"
-                autoCorrect={false}
-                returnKeyType="search"
-              />
             </>
           }
           renderItem={({ item }) => (
@@ -863,9 +932,8 @@ export default function SearchScreen() {
                 </Text>
                 <Text style={styles.itemName}>{item.name}</Text>
                 <Text style={styles.itemCategory}>
-                  {item.miles != null ? `~${item.miles} mi from search center` : 'Distance N/A'}
+                  {item.miles != null ? `~${item.miles} mi` : ''}
                 </Text>
-                <Text style={styles.tapForDetails}>Tap for full location details</Text>
               </Pressable>
               <View style={styles.storeRowActions}>
                 <Pressable
@@ -915,11 +983,13 @@ export default function SearchScreen() {
               <Text style={styles.emptyText}>
                 {placeLoading
                   ? 'Searching…'
-                  : groceryStores.length > 0 && storeListFilterNorm
-                    ? 'No stores match your list filter — clear the filter box or try different words.'
+                  : groceryStores.length > 0 &&
+                      storeBrandFilter &&
+                      storesInBrandScope.length === 0
+                    ? 'No stores for this chain here — tap All chains or try another area.'
                     : placeQuery.trim()
-                      ? 'No Walmart, Kroger, or Aldi found in that area (try another ZIP or city).'
-                      : 'Pan the map and release to search here, or type a US ZIP or city + state. For live data, run recipe-backend (GOOGLE_MAPS_API_KEY) and point EXPO_PUBLIC_RECIPE_API_URL at it.'}
+                      ? 'No stores found — try another ZIP or city.'
+                      : 'Type a US ZIP or city, or use the map.'}
               </Text>
             </View>
           }
@@ -993,11 +1063,11 @@ const styles = StyleSheet.create({
   modeChipTextOn: {
     color: '#fff',
   },
-  areaHint: {
-    marginTop: 8,
+  storeMetaLine: {
+    marginTop: 6,
+    marginBottom: 4,
+    fontSize: 12,
     color: palette.muted,
-    fontSize: 13,
-    lineHeight: 18,
   },
   errorText: {
     marginTop: 8,
@@ -1005,44 +1075,35 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
   },
-  usNationwideBox: {
-    marginTop: 10,
-    marginBottom: 4,
-    padding: 12,
-    borderRadius: 12,
-    backgroundColor: palette.surfaceAlt,
+  brandFilterBlock: {
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  brandFilterChipRow: {
+    gap: 8,
+    paddingBottom: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  brandFilterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 999,
+    backgroundColor: palette.surface,
     borderWidth: 1,
     borderColor: palette.border,
   },
-  usNationwideTitle: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: palette.greenDeep,
-    marginBottom: 6,
+  brandFilterChipOn: {
+    backgroundColor: palette.greenDeep,
+    borderColor: palette.greenDeep,
   },
-  usNationwideLine: {
+  brandFilterChipText: {
+    fontWeight: '700',
     fontSize: 13,
-    fontWeight: '600',
     color: palette.text,
-    lineHeight: 20,
   },
-  usNationwideFoot: {
-    marginTop: 6,
-    fontSize: 11,
-    color: palette.muted,
-    lineHeight: 16,
-  },
-  demoBanner: {
-    marginTop: 8,
-    marginBottom: 4,
-    padding: 10,
-    borderRadius: 10,
-    backgroundColor: palette.surfaceAlt,
-    borderWidth: 1,
-    borderColor: palette.border,
-    color: palette.muted,
-    fontSize: 12,
-    lineHeight: 17,
+  brandFilterChipTextOn: {
+    color: '#fff',
   },
   brandBadge: {
     fontSize: 11,
@@ -1142,12 +1203,13 @@ const styles = StyleSheet.create({
   searchGoBtn: {
     justifyContent: 'center',
     backgroundColor: palette.orange,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
     borderRadius: 12,
     borderTopWidth: 1,
     borderTopColor: palette.orangeSoft,
     borderBottomWidth: 2,
     borderBottomColor: palette.orangeDeep,
+    flexShrink: 0,
     ...shadows.card,
   },
   searchGoBtnText: {
@@ -1212,6 +1274,7 @@ const styles = StyleSheet.create({
     borderTopColor: palette.orangeSoft,
     borderBottomWidth: 2,
     borderBottomColor: palette.orangeDeep,
+    flexShrink: 0,
     ...shadows.card,
   },
   smallBtnText: { color: '#fff', fontWeight: '700' },
@@ -1221,70 +1284,12 @@ const styles = StyleSheet.create({
     paddingBottom: 32,
     flexGrow: 1,
   },
-  storeListSectionTitle: {
-    marginTop: 4,
-    marginBottom: 4,
-    fontWeight: '800',
-    fontSize: 15,
-    color: palette.greenDeep,
-  },
-  storeListSectionSub: {
-    fontSize: 12,
-    color: palette.muted,
-    lineHeight: 17,
-    marginBottom: 10,
-  },
-  storeListFilterInput: {
-    marginBottom: 12,
-  },
   locationLine: {
     fontSize: 14,
     fontWeight: '600',
     color: palette.text,
     lineHeight: 20,
     marginBottom: 4,
-  },
-  regionPresetBlock: {
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  regionPresetTitle: {
-    fontWeight: '800',
-    fontSize: 14,
-    color: palette.greenDeep,
-    marginBottom: 6,
-  },
-  regionPresetHint: {
-    fontSize: 12,
-    color: palette.muted,
-    lineHeight: 17,
-    marginBottom: 10,
-  },
-  regionChipRow: {
-    gap: 8,
-    paddingBottom: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  regionChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: palette.surface,
-    borderWidth: 1,
-    borderColor: palette.border,
-  },
-  regionChipOn: {
-    backgroundColor: palette.greenDeep,
-    borderColor: palette.greenDeep,
-  },
-  regionChipText: {
-    fontWeight: '700',
-    fontSize: 13,
-    color: palette.text,
-  },
-  regionChipTextOn: {
-    color: '#fff',
   },
   row: {
     backgroundColor: palette.surface,
@@ -1301,12 +1306,6 @@ const styles = StyleSheet.create({
   },
   itemName: { fontSize: 16, fontWeight: '700', color: palette.text },
   itemCategory: { marginTop: 2, color: palette.muted },
-  tapForDetails: {
-    marginTop: 6,
-    fontSize: 11,
-    fontWeight: '600',
-    color: palette.greenDeep,
-  },
   rowSelected: {
     borderColor: palette.greenDeep,
     borderWidth: 2,

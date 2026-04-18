@@ -111,6 +111,148 @@ function mockGroceryChainsNear(lat, lng) {
   });
 }
 
+/** Strip leading chain name so "Walmart 97146" / "Kroger 30309" / "Aldi Portland, OR" geocode correctly. */
+const CHAIN_ONLY = /^\s*(walmart|kroger|aldi)\s*$/i;
+
+function stripLeadingChainQuery(raw) {
+  const t = String(raw || "").trim();
+  if (CHAIN_ONLY.test(t)) return "";
+  const m = t.match(/^\s*(walmart|kroger|aldi)\s+(.+)$/i);
+  return m ? m[2].trim() : t;
+}
+
+const OVERPASS_INTERPRETER = "https://overpass-api.de/api/interpreter";
+
+/**
+ * Free store POIs via OpenStreetMap Overpass API (no Google key).
+ * Walmart, Kroger, and Aldi: brand / operator / brand:wikidata / shop+name fallbacks (US coverage varies).
+ */
+async function overpassGroceryChainsNear(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  const r = 25000;
+  const q = `
+[out:json][timeout:60];
+(
+  nwr["brand"="Walmart"](around:${r},${la},${ln});
+  nwr["brand"="Kroger"](around:${r},${la},${ln});
+  nwr["brand"="Aldi"](around:${r},${la},${ln});
+  nwr["brand"="ALDI"](around:${r},${la},${ln});
+  nwr["operator"="Kroger"](around:${r},${la},${ln});
+  nwr["operator"="Aldi"](around:${r},${la},${ln});
+  nwr["operator"="ALDI"](around:${r},${la},${ln});
+  nwr["brand:wikidata"="Q483551"](around:${r},${la},${ln});
+  nwr["brand:wikidata"="Q125967"](around:${r},${la},${ln});
+  nwr["brand:wikidata"="Q496807"](around:${r},${la},${ln});
+  nwr["brand:wikidata"="Q1530382"](around:${r},${la},${ln});
+  nwr["shop"="supermarket"]["name"~"Walmart",i](around:${r},${la},${ln});
+  nwr["shop"="supermarket"]["name"~"Kroger",i](around:${r},${la},${ln});
+  nwr["shop"="supermarket"]["name"~"Aldi",i](around:${r},${la},${ln});
+  nwr["shop"="department_store"]["name"~"Walmart",i](around:${r},${la},${ln});
+  nwr["shop"="department_store"]["name"~"Kroger",i](around:${r},${la},${ln});
+  nwr["shop"="discount_supermarket"]["name"~"Aldi",i](around:${r},${la},${ln});
+);
+out center;
+`.trim();
+
+  const response = await fetch(OVERPASS_INTERPRETER, {
+    method: "POST",
+    body: q,
+    headers: {
+      "Content-Type": "text/plain;charset=UTF-8",
+      "User-Agent": "go-to-grocery-app/1.0 (recipe-backend; OSM Overpass)",
+    },
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.remark || `Overpass HTTP ${response.status}`);
+  }
+
+  return normalizeOverpassElements(data, la, ln);
+}
+
+function classifyOsmGroceryBrand(name, tags) {
+  const tagsBrand = String(tags?.brand || "");
+  const b = tagsBrand.toLowerCase();
+  const n = String(name || "").toLowerCase();
+  const op = String(tags?.operator || "").toLowerCase();
+  const wd = String(tags["brand:wikidata"] || "");
+
+  // Common Wikidata IDs for chain stores in OSM
+  if (wd === "Q483551") return "walmart";
+  if (wd === "Q125967" || wd === "Q496807") return "aldi";
+  if (wd === "Q1530382" || wd === "Q1193285") return "kroger";
+
+  if (b.includes("walmart") || /\bwalmart\b/.test(n)) return "walmart";
+  if (b.includes("kroger") || op.includes("kroger") || /\bkroger\b/.test(n)) return "kroger";
+  if (
+    b.includes("aldi") ||
+    op.includes("aldi") ||
+    /\baldi\b/.test(n) ||
+    /^aldi\s/i.test(String(name || "").trim())
+  ) {
+    return "aldi";
+  }
+  return null;
+}
+
+function formatOsmAddress(tags) {
+  if (!tags || typeof tags !== "object") return "";
+  const line1 = [tags["addr:housenumber"], tags["addr:street"]].filter(Boolean).join(" ");
+  const line2 = [tags["addr:city"], tags["addr:state"], tags["addr:postcode"]]
+    .filter(Boolean)
+    .join(", ");
+  const parts = [line1, line2].filter(Boolean);
+  if (parts.length) return parts.join(", ");
+  return String(tags["addr:full"] || "").trim();
+}
+
+function normalizeOverpassElements(data, centerLat, centerLng) {
+  const elements = Array.isArray(data?.elements) ? data.elements : [];
+  const seen = new Set();
+  const out = [];
+
+  for (const el of elements) {
+    let plat;
+    let plng;
+    if (el.type === "node") {
+      plat = el.lat;
+      plng = el.lon;
+    } else if (el.center) {
+      plat = el.center.lat;
+      plng = el.center.lon;
+    } else {
+      continue;
+    }
+    if (!Number.isFinite(plat) || !Number.isFinite(plng)) continue;
+
+    const tags = el.tags || {};
+    const name = tags.name || tags.brand || "Store";
+    const brand = classifyOsmGroceryBrand(name, tags);
+    if (!brand) continue;
+
+    const uid = `${el.type}-${el.id}`;
+    if (seen.has(uid)) continue;
+    seen.add(uid);
+
+    const address = formatOsmAddress(tags);
+    out.push({
+      id: `osm-${uid}`,
+      placeId: `osm-${uid}`,
+      brand,
+      name: String(name).slice(0, 200),
+      address: address || "Address from OpenStreetMap",
+      lat: plat,
+      lng: plng,
+      miles: Math.round(distanceMiles(centerLat, centerLng, plat, plng) * 10) / 10,
+    });
+  }
+
+  out.sort((a, b) => (a.miles ?? 0) - (b.miles ?? 0));
+  return out.slice(0, 80);
+}
+
 async function nominatimGeocode(query) {
   const q = String(query || "").trim();
   if (!q) return null;
@@ -136,6 +278,40 @@ async function nominatimGeocode(query) {
     lng: ln,
     formatted: hit.display_name || q,
   };
+}
+
+/** US location autocomplete for the store finder (Nominatim — max ~1 req/s; client debounces). */
+async function nominatimSearchSuggest(query) {
+  const q = String(query || "").trim();
+  if (q.length < 2) return [];
+  const url = new URL("https://nominatim.openstreetmap.org/search");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("limit", "8");
+  url.searchParams.set("countrycodes", "us");
+  url.searchParams.set("q", q);
+  url.searchParams.set("addressdetails", "0");
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "go-to-grocery-app/1.0 (recipe-backend; geocode-suggest)",
+      Accept: "application/json",
+    },
+  });
+  const data = await response.json().catch(() => []);
+  if (!Array.isArray(data)) return [];
+  return data
+    .map((hit, i) => {
+      const la = Number(hit.lat);
+      const ln = Number(hit.lon);
+      if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
+      const id = hit.place_id != null ? `n${hit.place_id}` : `nom-${i}-${la}-${ln}`;
+      return {
+        id,
+        label: String(hit.display_name || "").slice(0, 200),
+        lat: la,
+        lng: ln,
+      };
+    })
+    .filter(Boolean);
 }
 
 async function findGroceryChains(lat, lng, apiKey) {
@@ -314,8 +490,24 @@ app.get("/health", (_req, res) => {
     port: PORT,
     geminiConfigured: Boolean(GEMINI_API_KEY),
     googleMapsConfigured: Boolean(GOOGLE_MAPS_API_KEY),
-    storeSearchMode: GOOGLE_MAPS_API_KEY ? "google_places" : "demo_pins",
+    storeSearchMode: GOOGLE_MAPS_API_KEY ? "google_places" : "osm_overpass",
   });
+});
+
+app.get("/places/geocode-suggest", async (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (q.length < 2) {
+    return res.json({ suggestions: [] });
+  }
+  try {
+    const suggestions = await nominatimSearchSuggest(q);
+    return res.json({ suggestions });
+  } catch (e) {
+    return res.status(502).json({
+      suggestions: [],
+      error: e?.message || String(e),
+    });
+  }
 });
 
 app.post("/places/grocery-stores", async (req, res) => {
@@ -323,8 +515,16 @@ app.post("/places/grocery-stores", async (req, res) => {
 
   let lat = req.body?.lat;
   let lng = req.body?.lng;
-  const q = String(req.body?.query || "").trim();
+  const qRaw = String(req.body?.query || "").trim();
+  const q = stripLeadingChainQuery(qRaw);
   let locationLabel = null;
+
+  if ((lat == null || lng == null) && !q && qRaw && CHAIN_ONLY.test(qRaw)) {
+    return res.status(400).json({
+      error:
+        'Add a ZIP or city after the store name (e.g. "Walmart 97201", "Kroger 30309", "Aldi Portland, OR"), or clear the field to search near your location.',
+    });
+  }
 
   if ((lat == null || lng == null) && q) {
     if (useGoogle) {
@@ -373,6 +573,22 @@ app.post("/places/grocery-stores", async (req, res) => {
   const lngN = Number(lng);
 
   if (!useGoogle) {
+    try {
+      const stores = await overpassGroceryChainsNear(latN, lngN);
+      if (stores.length) {
+        return res.json({
+          lat: latN,
+          lng: lngN,
+          locationLabel,
+          stores,
+          brands: GROCERY_BRANDS.map((b) => b.id),
+          demo: false,
+          source: "osm_overpass",
+        });
+      }
+    } catch (e) {
+      console.warn("Overpass grocery search:", e?.message || e);
+    }
     const stores = mockGroceryChainsNear(latN, lngN);
     return res.json({
       lat: latN,
@@ -381,6 +597,8 @@ app.post("/places/grocery-stores", async (req, res) => {
       stores,
       brands: GROCERY_BRANDS.map((b) => b.id),
       demo: true,
+      source: "demo_fallback",
+      overpassError: "No OSM results or Overpass unavailable — showing demo pins.",
     });
   }
 
