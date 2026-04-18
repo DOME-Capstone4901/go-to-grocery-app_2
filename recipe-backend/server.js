@@ -53,6 +53,7 @@ function distanceMiles(lat1, lon1, lat2, lon2) {
 async function googleGeocode(address, apiKey) {
   const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
   url.searchParams.set("address", address);
+  url.searchParams.set("components", "country:US");
   url.searchParams.set("key", apiKey);
   const response = await fetch(url);
   const data = await response.json().catch(() => ({}));
@@ -116,6 +117,7 @@ async function nominatimGeocode(query) {
   const url = new URL("https://nominatim.openstreetmap.org/search");
   url.searchParams.set("format", "json");
   url.searchParams.set("limit", "1");
+  url.searchParams.set("countrycodes", "us");
   url.searchParams.set("q", q);
   const response = await fetch(url, {
     headers: {

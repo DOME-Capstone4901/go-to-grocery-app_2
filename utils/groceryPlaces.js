@@ -1,3 +1,5 @@
+import { filterStoresToUnitedStates } from './usBounds';
+
 const zipcodes = require('zipcodes');
 
 /**
@@ -87,6 +89,19 @@ function getApiBase() {
   return `http://localhost:${DEFAULT_API_PORT}`;
 }
 
+/** Try localhost and 127.0.0.1 — some Windows setups only resolve one of them. */
+function getApiBaseCandidates() {
+  const primary = getApiBase();
+  const out = new Set([primary]);
+  if (primary.includes('://localhost:')) {
+    out.add(primary.replace('://localhost:', '://127.0.0.1:'));
+  }
+  if (primary.includes('://127.0.0.1:')) {
+    out.add(primary.replace('://127.0.0.1:', '://localhost:'));
+  }
+  return [...out];
+}
+
 /**
  * Loads Walmart, Kroger, and Aldi near a point via the recipe backend (Google Places Nearby Search).
  * Google Cloud billing applies; many projects get $200/mo credit — not unlimited “free.”
@@ -100,25 +115,35 @@ export async function fetchGroceryChainStores(params = {}) {
   }
   const body = hasCoords ? { lat: Number(lat), lng: Number(lng) } : { query: q };
 
-  const apiBase = getApiBase();
-  const url = `${apiBase}/places/grocery-stores`;
-
+  const candidates = getApiBaseCandidates();
   let res;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-  } catch (e) {
+  let lastNetworkErr;
+  for (const apiBase of candidates) {
+    const url = `${apiBase}/places/grocery-stores`;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      lastNetworkErr = null;
+      break;
+    } catch (e) {
+      lastNetworkErr = e;
+    }
+  }
+
+  if (!res && lastNetworkErr) {
+    const e = lastNetworkErr;
     const msg = e?.message || String(e);
     const isNetwork =
       msg === 'Failed to fetch' ||
       msg.includes('Network request failed') ||
       e?.name === 'TypeError';
     if (isNetwork) {
+      const tried = candidates.join(' · ');
       throw new Error(
-        `Cannot reach the store API at ${apiBase}. In a separate terminal run: cd recipe-backend && npm start (needs GOOGLE_MAPS_API_KEY in recipe-backend/.env). Ensure nothing else uses port 3000.`
+        `Cannot reach the store API (tried: ${tried}). From the project root run: npm run recipe-backend — or: cd recipe-backend && npm start. Set GOOGLE_MAPS_API_KEY in recipe-backend/.env for live Google Places (optional: demo mode works without it). Use port 3000 or set EXPO_PUBLIC_RECIPE_API_URL.`
       );
     }
     throw e;
@@ -128,6 +153,9 @@ export async function fetchGroceryChainStores(params = {}) {
   if (!res.ok) {
     throw new Error(data.error || `Stores request failed (${res.status})`);
   }
+  if (Array.isArray(data.stores)) {
+    data.stores = filterStoresToUnitedStates(data.stores);
+  }
   return data;
 }
 
@@ -136,4 +164,38 @@ export function mapsUrlForPlace({ placeId, name, lat, lng }) {
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name || 'place')}&query_place_id=${encodeURIComponent(placeId)}`;
   }
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+}
+
+/**
+ * Opens Google Maps driving directions. Prefer passing user GPS as origin when available.
+ */
+export function mapsDrivingDirectionsUrl({
+  originLat,
+  originLng,
+  destLat,
+  destLng,
+  placeId,
+  name,
+}) {
+  const params = new URLSearchParams({ api: '1', travelmode: 'driving' });
+  const dLat = Number(destLat);
+  const dLng = Number(destLng);
+  const pid = placeId != null ? String(placeId) : '';
+  const isDemo = pid.startsWith('demo-');
+  if (pid && !isDemo && pid.length > 8) {
+    params.set('destination', String(name || 'Store').slice(0, 200));
+    params.set('destination_place_id', pid);
+  } else if (Number.isFinite(dLat) && Number.isFinite(dLng)) {
+    params.set('destination', `${dLat},${dLng}`);
+  } else {
+    params.set('destination', String(name || 'Store'));
+  }
+
+  const oLa = Number(originLat);
+  const oLn = Number(originLng);
+  if (Number.isFinite(oLa) && Number.isFinite(oLn)) {
+    params.set('origin', `${oLa},${oLn}`);
+  }
+
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
 }

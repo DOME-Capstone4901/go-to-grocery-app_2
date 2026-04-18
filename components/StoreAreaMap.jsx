@@ -1,42 +1,364 @@
-import React from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Platform, StyleSheet, Text, View } from 'react-native';
-import { WebView } from 'react-native-webview';
 import { palette, shadows } from '../utils/theme';
 
-const MAP_HEIGHT = 240;
+const MAP_HEIGHT = 320;
+
+const BRAND_DOT = {
+  walmart: '#0071ce',
+  kroger: '#004990',
+  aldi: '#00529B',
+};
 
 /**
- * Embedded map centered on the search area (Google Maps embed).
- * Works in Expo web and native via WebView iframe.
+ * `react-native-webview` is a no-op stub in browsers ("does not support this platform").
+ * Real RN native runtimes report `navigator.product === 'ReactNative'` — use WebView there.
+ * Otherwise prefer an iframe when a DOM exists (Expo web and normal browsers).
  */
-export default function StoreAreaMap({ lat, lng, subtitle }) {
+function shouldUseIframeMap() {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.product === 'ReactNative') {
+      return false;
+    }
+  } catch {
+    /* ignore */
+  }
+  if (Platform.OS === 'ios' || Platform.OS === 'android') {
+    return false;
+  }
+  if (Platform.OS === 'web') {
+    return true;
+  }
+  return (
+    typeof document !== 'undefined' &&
+    typeof document.createElement === 'function'
+  );
+}
+
+/**
+ * Interactive map (Leaflet + OSM) — pan and zoom, then stores reload for the map center.
+ * Native: WebView + injectJavaScript. Web: iframe + postMessage (WebView is not supported on web).
+ */
+function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = false) {
+  const la = Number(centerLat);
+  const ln = Number(centerLng);
+  const autoFitFlag = autoFitStores ? 'true' : 'false';
+  const storeListener = iframeBridge
+    ? `
+  window.addEventListener('message', function(ev) {
+    try {
+      var raw = typeof ev.data === 'string' ? ev.data : '';
+      if (!raw || raw.charAt(0) !== '{') return;
+      var d = JSON.parse(raw);
+      if (d && d.type === 'stores' && typeof d.data === 'string' && window.__setStores) {
+        window.__setStores(d.data);
+      }
+    } catch (err) {}
+  });`
+    : '';
+
+  const postToHost = iframeBridge
+    ? 'try { if (window.parent) window.parent.postMessage(payload, \'*\'); } catch (e) {}'
+    : 'try { if (window.ReactNativeWebView) window.ReactNativeWebView.postMessage(payload); } catch (e) {}';
+
+  return `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+<style>
+  html, body, #map { height: 100%; margin: 0; padding: 0; }
+  .leaflet-control-attribution { font-size: 10px; max-width: 60%; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+(function() {
+  var AUTO_FIT_STORES = ${autoFitFlag};
+  var map = L.map('map', { zoomControl: true }).setView([${la}, ${ln}], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+  var markerLayer = L.layerGroup().addTo(map);
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  }
+
+  window.__setStores = function(jsonStr) {
+    try {
+      var stores = JSON.parse(jsonStr);
+      markerLayer.clearLayers();
+      if (!stores || !stores.length) return;
+      var colors = { walmart: '#0071ce', kroger: '#004990', aldi: '#00529B', default: '#c45c26' };
+      stores.forEach(function(s) {
+        var plat = Number(s.lat), plng = Number(s.lng);
+        if (!isFinite(plat) || !isFinite(plng)) return;
+        var b = String(s.brand || '').toLowerCase();
+        var c = colors[b] || colors.default;
+        var m = L.circleMarker([plat, plng], { radius: 10, fillColor: c, color: '#fff', weight: 2, fillOpacity: 0.95 });
+        var addr = esc(s.address || 'Address from search');
+        var dist = s.miles != null ? ('~' + s.miles + ' mi · ') : '';
+        var popupHtml = '<div style="font-size:12px;line-height:1.45;max-width:220px">' +
+          '<b style="font-size:13px">' + esc(s.name || 'Store') + '</b><br/>' +
+          '<span style="color:#333">' + esc(String(s.brand || '')) + '</span><br/>' +
+          '<span style="color:#444">' + addr + '</span><br/>' +
+          '<span style="color:#666;font-size:11px">' + dist + plat.toFixed(4) + ', ' + plng.toFixed(4) + '</span></div>';
+        m.bindPopup(popupHtml);
+        m.on('click', function() {
+          var payload = JSON.stringify({ type: 'storeSelect', store: s });
+          ${postToHost}
+        });
+        m.addTo(markerLayer);
+      });
+      if (AUTO_FIT_STORES && stores.length) {
+        var pts = [];
+        for (var i = 0; i < stores.length; i++) {
+          var st = stores[i];
+          var xla = Number(st.lat), xln = Number(st.lng);
+          if (isFinite(xla) && isFinite(xln)) pts.push([xla, xln]);
+        }
+        if (pts.length === 1) {
+          map.setView(pts[0], Math.max(map.getZoom(), 14));
+        } else if (pts.length > 1) {
+          var b = L.latLngBounds(pts);
+          map.fitBounds(b, { padding: [36, 36], maxZoom: 15, animate: true });
+        }
+      }
+    } catch (e) {}
+  };
+  ${storeListener}
+
+  var reportMoves = false;
+  setTimeout(function() { reportMoves = true; }, 750);
+  var idleTimer = null;
+  function postIdle() {
+    var c = map.getCenter();
+    var payload = JSON.stringify({ type: 'mapIdle', lat: c.lat, lng: c.lng });
+    ${postToHost}
+  }
+  map.on('moveend', function() {
+    if (!reportMoves) return;
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(postIdle, 450);
+  });
+  map.doubleClickZoom.disable();
+  map.on('dblclick', function(e) {
+    var ll = e.latlng;
+    var payload = JSON.stringify({ type: 'mapDoubleClick', lat: ll.lat, lng: ll.lng });
+    ${postToHost}
+  });
+})();
+</script>
+</body></html>`;
+}
+
+export default function StoreAreaMap({
+  lat,
+  lng,
+  subtitle,
+  stores = [],
+  /** Remount map when the user runs a new location search (text). */
+  mapKey,
+  /** When true, map pans/zooms to fit all pins whenever the store list updates (can feel jumpy). */
+  autoFitStores = false,
+  onMapIdle,
+  /** Fires when user taps a store pin (full store object from search results). */
+  onStoreSelect,
+  /** Double-click on map background: search stores at that point (US-only in parent). */
+  onMapDoubleClick,
+}) {
+  const useIframeMap = shouldUseIframeMap();
+  const webRef = useRef(null);
+  const iframeRef = useRef(null);
+  const htmlAnchorRef = useRef({ la: NaN, ln: NaN, key: null });
   const la = Number(lat);
   const ln = Number(lng);
-  if (!Number.isFinite(la) || !Number.isFinite(ln)) {
+  const coordsValid = Number.isFinite(la) && Number.isFinite(ln);
+
+  const anchorKey = String(mapKey ?? 'map-area');
+  if (coordsValid && htmlAnchorRef.current.key !== anchorKey) {
+    htmlAnchorRef.current = { la, ln, key: anchorKey };
+  }
+
+  const html = useMemo(() => {
+    const { la: hLa, ln: hLn } = htmlAnchorRef.current;
+    if (!Number.isFinite(hLa) || !Number.isFinite(hLn)) {
+      return '<!DOCTYPE html><html><head></head><body></body></html>';
+    }
+    return buildLeafletHtml(hLa, hLn, useIframeMap, autoFitStores);
+  }, [anchorKey, useIframeMap, autoFitStores]);
+
+  const storesRef = useRef(stores);
+  storesRef.current = stores;
+
+  const pushMarkersToWeb = useCallback(() => {
+    const payload = JSON.stringify(storesRef.current ?? []);
+    if (useIframeMap) {
+      const win = iframeRef.current?.contentWindow;
+      if (win) {
+        win.postMessage(JSON.stringify({ type: 'stores', data: payload }), '*');
+      }
+      return;
+    }
+    const wv = webRef.current;
+    if (!wv) return;
+    const js = `(function(){ try { if (window.__setStores) window.__setStores(${JSON.stringify(payload)}); } catch(e) {} true; })();`;
+    wv.injectJavaScript(js);
+  }, [useIframeMap]);
+
+  useEffect(() => {
+    pushMarkersToWeb();
+  }, [stores, pushMarkersToWeb]);
+
+  useEffect(() => {
+    if (!useIframeMap) return undefined;
+    const handler = e => {
+      if (iframeRef.current && e.source !== iframeRef.current.contentWindow) return;
+      try {
+        const raw = typeof e.data === 'string' ? e.data : '';
+        if (!raw || raw.charAt(0) !== '{') return;
+        const msg = JSON.parse(raw);
+        if (msg.type === 'mapIdle' && msg.lat != null && msg.lng != null && onMapIdle) {
+          onMapIdle(Number(msg.lat), Number(msg.lng));
+        }
+        if (msg.type === 'storeSelect' && msg.store && onStoreSelect) {
+          onStoreSelect(msg.store);
+        }
+        if (
+          msg.type === 'mapDoubleClick' &&
+          msg.lat != null &&
+          msg.lng != null &&
+          onMapDoubleClick
+        ) {
+          onMapDoubleClick(Number(msg.lat), Number(msg.lng));
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('message', handler);
+      return () => window.removeEventListener('message', handler);
+    }
+    return undefined;
+  }, [useIframeMap, onMapIdle, onStoreSelect, onMapDoubleClick]);
+
+  if (!coordsValid) {
     return null;
   }
 
-  const embedSrc = `https://www.google.com/maps?q=${encodeURIComponent(`${la},${ln}`)}&z=13&output=embed`;
+  const webviewKey = mapKey != null && String(mapKey).length > 0 ? String(mapKey) : 'map-area';
 
-  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/></head><body style="margin:0;padding:0;overflow:hidden;background:#dfe5e0"><iframe title="map" width="100%" height="100%" style="border:0;display:block" src="${embedSrc}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen></iframe></body></html>`;
+  const NativeWebView = useMemo(() => {
+    if (useIframeMap) return null;
+    return require('react-native-webview').default;
+  }, [useIframeMap]);
+
+  const pinCounts = useMemo(() => {
+    const c = { walmart: 0, kroger: 0, aldi: 0 };
+    for (const s of stores || []) {
+      const b = String(s.brand || '').toLowerCase();
+      if (b === 'walmart' || b === 'kroger' || b === 'aldi') c[b] += 1;
+    }
+    return c;
+  }, [stores]);
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.title}>Location</Text>
+      <Text style={styles.title}>Map — drag to explore</Text>
+      <Text style={styles.hint}>
+        Double-click anywhere to load stores there, or pan and release. Tap a pin for details.
+      </Text>
       {subtitle ? (
         <Text style={styles.subtitle} numberOfLines={2}>
           {subtitle}
         </Text>
       ) : null}
-      <WebView
-        source={{ html }}
-        style={styles.webview}
-        scrollEnabled={false}
-        originWhitelist={['*']}
-        javaScriptEnabled
-        domStorageEnabled
-        {...(Platform.OS === 'android' ? { nestedScrollEnabled: true } : {})}
-      />
+      {useIframeMap ? (
+        // react-native-webview is a stub on web; iframe + postMessage works in the browser.
+        // eslint-disable-next-line react/no-unknown-property
+        <iframe
+          key={webviewKey}
+          ref={iframeRef}
+          title="Store search map"
+          srcDoc={html}
+          style={{
+            width: '100%',
+            height: MAP_HEIGHT,
+            borderWidth: 0,
+            borderStyle: 'solid',
+            backgroundColor: '#dfe5e0',
+          }}
+          sandbox="allow-scripts allow-same-origin"
+          onLoad={pushMarkersToWeb}
+        />
+      ) : NativeWebView ? (
+        <NativeWebView
+          ref={webRef}
+          key={webviewKey}
+          source={{ html }}
+          style={styles.webview}
+          scrollEnabled={false}
+          originWhitelist={['*']}
+          javaScriptEnabled
+          domStorageEnabled
+          onLoadEnd={pushMarkersToWeb}
+          onMessage={event => {
+            try {
+              const msg = JSON.parse(event.nativeEvent.data);
+              if (msg.type === 'mapIdle' && msg.lat != null && msg.lng != null && onMapIdle) {
+                onMapIdle(Number(msg.lat), Number(msg.lng));
+              }
+              if (msg.type === 'storeSelect' && msg.store && onStoreSelect) {
+                onStoreSelect(msg.store);
+              }
+              if (
+                msg.type === 'mapDoubleClick' &&
+                msg.lat != null &&
+                msg.lng != null &&
+                onMapDoubleClick
+              ) {
+                onMapDoubleClick(Number(msg.lat), Number(msg.lng));
+              }
+            } catch {
+              /* ignore */
+            }
+          }}
+          {...(Platform.OS === 'android' ? { nestedScrollEnabled: true } : {})}
+        />
+      ) : null}
+
+      <View style={styles.pinFooter}>
+        <Text style={styles.pinFooterTitle}>Store pins on the map</Text>
+        <Text style={styles.pinFooterLine}>
+          Each dot uses the latitude & longitude returned by the store API (recipe-backend / Google Places
+          when configured).
+          {autoFitStores
+            ? ' The map recenters to fit every pin after each search.'
+            : ' The map view stays where you leave it when pins update — pan and zoom yourself.'}
+        </Text>
+        <View style={styles.legendRow}>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.walmart }]} />
+            <Text style={styles.legendText}>Walmart ({pinCounts.walmart})</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.kroger }]} />
+            <Text style={styles.legendText}>Kroger ({pinCounts.kroger})</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.aldi }]} />
+            <Text style={styles.legendText}>Aldi ({pinCounts.aldi})</Text>
+          </View>
+        </View>
+        <Text style={styles.pinFooterMuted}>
+          {stores.length} location{stores.length === 1 ? '' : 's'} plotted — same results as the list below.
+        </Text>
+      </View>
     </View>
   );
 }
@@ -59,6 +381,13 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 4,
   },
+  hint: {
+    fontSize: 12,
+    color: palette.muted,
+    paddingHorizontal: 12,
+    paddingBottom: 6,
+    lineHeight: 17,
+  },
   subtitle: {
     fontSize: 12,
     color: palette.muted,
@@ -69,5 +398,53 @@ const styles = StyleSheet.create({
     height: MAP_HEIGHT,
     width: '100%',
     backgroundColor: '#dfe5e0',
+  },
+  pinFooter: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+    backgroundColor: palette.surfaceAlt,
+  },
+  pinFooterTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: palette.greenDeep,
+    marginBottom: 6,
+  },
+  pinFooterLine: {
+    fontSize: 11,
+    color: palette.muted,
+    lineHeight: 16,
+    marginBottom: 10,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+    marginBottom: 8,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#fff',
+  },
+  legendText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: palette.text,
+  },
+  pinFooterMuted: {
+    fontSize: 11,
+    color: palette.muted,
+    lineHeight: 15,
   },
 });
