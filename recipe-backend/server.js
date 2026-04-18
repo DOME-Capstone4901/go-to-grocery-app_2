@@ -314,6 +314,248 @@ async function nominatimSearchSuggest(query) {
     .filter(Boolean);
 }
 
+function distanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = deg2rad(lat2 - lat1);
+  const dLon = deg2rad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/** Nominatim reverse — no API key. */
+async function nominatimReverseGeo(lat, lng) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
+  const url = new URL("https://nominatim.openstreetmap.org/reverse");
+  url.searchParams.set("format", "json");
+  url.searchParams.set("lat", String(la));
+  url.searchParams.set("lon", String(ln));
+  url.searchParams.set("addressdetails", "1");
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "go-to-grocery-app/1.0 (recipe-backend; reverse-geocode)",
+      Accept: "application/json",
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!data || data.error) return null;
+  const addr = data.address || {};
+  const city =
+    addr.city ||
+    addr.town ||
+    addr.village ||
+    addr.hamlet ||
+    addr.municipality ||
+    addr.county ||
+    "";
+  const locality =
+    addr.suburb || addr.neighbourhood || addr.quarter || addr.residential || "";
+  const line1 = [addr.house_number, addr.road].filter(Boolean).join(" ").trim();
+  return {
+    latitude: la,
+    longitude: ln,
+    formattedAddress: String(data.display_name || "").slice(0, 500),
+    country: String(addr.country || ""),
+    countryCode: String(addr.country_code || "").toUpperCase(),
+    city: String(city),
+    locality: String(locality),
+    state: String(addr.state || ""),
+    postalCode: String(addr.postcode || ""),
+    streetLine: line1,
+    raw: addr,
+  };
+}
+
+function googlePlacesTypeCategory(types) {
+  const t = Array.isArray(types) ? types : [];
+  if (t.includes("supermarket")) return "Supermarket";
+  if (t.includes("grocery_or_supermarket")) return "Grocery / supermarket";
+  if (t.includes("convenience_store")) return "Convenience store";
+  if (t.includes("store")) return "Store";
+  if (t.includes("food")) return "Food retail";
+  return "Grocery / retail";
+}
+
+async function googlePlacesBroadFoodRetail(lat, lng, radiusM, apiKey) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  const r = Math.min(Math.max(Number(radiusM) || 3000, 100), 50000);
+  const types = ["grocery_or_supermarket", "supermarket", "convenience_store"];
+  const seen = new Set();
+  const out = [];
+
+  for (const typ of types) {
+    const url = new URL("https://maps.googleapis.com/maps/api/place/nearbysearch/json");
+    url.searchParams.set("location", `${la},${ln}`);
+    url.searchParams.set("radius", String(r));
+    url.searchParams.set("type", typ);
+    url.searchParams.set("key", apiKey);
+    const response = await fetch(url);
+    const data = await response.json().catch(() => ({}));
+    if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+      const msg = data.error_message || data.status || "Nearby search failed";
+      if (data.status === "REQUEST_DENIED" || data.status === "INVALID_REQUEST") {
+        throw new Error(msg);
+      }
+      continue;
+    }
+    for (const p of data.results || []) {
+      const pid = p.place_id;
+      if (!pid || seen.has(pid)) continue;
+      seen.add(pid);
+      const plat = p.geometry?.location?.lat;
+      const plng = p.geometry?.location?.lng;
+      if (plat == null || plng == null) continue;
+      const dKm = distanceKm(la, ln, plat, plng);
+      if (dKm * 1000 > r * 1.05) continue;
+      out.push({
+        id: pid,
+        placeId: pid,
+        name: String(p.name || "Store").slice(0, 200),
+        address: String(p.vicinity || p.formatted_address || "").slice(0, 300),
+        lat: plat,
+        lng: plng,
+        category: googlePlacesTypeCategory(p.types),
+        distanceKm: Math.round(dKm * 1000) / 1000,
+      });
+    }
+  }
+
+  out.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
+  return out.slice(0, 100);
+}
+
+function osmShopCategory(tags) {
+  const s = String(tags?.shop || "").toLowerCase();
+  if (s === "supermarket") return "Supermarket";
+  if (s === "convenience") return "Convenience store";
+  if (s === "general") return "General store";
+  if (s === "department_store") return "Department store";
+  if (s === "mall") return "Mall / retail";
+  if (s === "yes") return "Shop (unspecified)";
+  return "Grocery / retail";
+}
+
+function normalizeBroadOverpassElements(data, centerLat, centerLng, maxRadiusKm) {
+  const elements = Array.isArray(data?.elements) ? data.elements : [];
+  const seen = new Set();
+  const out = [];
+
+  for (const el of elements) {
+    let plat;
+    let plng;
+    if (el.type === "node") {
+      plat = el.lat;
+      plng = el.lon;
+    } else if (el.center) {
+      plat = el.center.lat;
+      plng = el.center.lon;
+    } else {
+      continue;
+    }
+    if (!Number.isFinite(plat) || !Number.isFinite(plng)) continue;
+
+    const tags = el.tags || {};
+    const name = tags.name || tags.brand || tags.operator;
+    if (!name) continue;
+
+    const uid = `${el.type}-${el.id}`;
+    if (seen.has(uid)) continue;
+    seen.add(uid);
+
+    const dKm = distanceKm(centerLat, centerLng, plat, plng);
+    if (dKm > maxRadiusKm * 1.05) continue;
+
+    out.push({
+      id: `osm-retail-${uid}`,
+      placeId: `osm-retail-${uid}`,
+      name: String(name).slice(0, 200),
+      address: formatOsmAddress(tags) || "Address from OpenStreetMap",
+      lat: plat,
+      lng: plng,
+      category: osmShopCategory(tags),
+      distanceKm: Math.round(dKm * 1000) / 1000,
+    });
+  }
+
+  out.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
+  return out.slice(0, 100);
+}
+
+async function overpassBroadFoodRetail(lat, lng, radiusM) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  const r = Math.min(Math.max(Number(radiusM) || 3000, 100), 25000);
+  const q = `
+[out:json][timeout:75];
+(
+  nwr["shop"="supermarket"](around:${r},${la},${ln});
+  nwr["shop"="convenience"](around:${r},${la},${ln});
+  nwr["shop"="general"](around:${r},${la},${ln});
+  nwr["shop"="department_store"](around:${r},${la},${ln});
+);
+out center;
+`.trim();
+
+  const response = await fetch(OVERPASS_INTERPRETER, {
+    method: "POST",
+    body: q,
+    headers: {
+      "Content-Type": "text/plain;charset=UTF-8",
+      "User-Agent": "go-to-grocery-app/1.0 (recipe-backend; broad-retail)",
+    },
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.remark || `Overpass HTTP ${response.status}`);
+  }
+
+  const maxKm = r / 1000;
+  return normalizeBroadOverpassElements(data, la, ln, maxKm);
+}
+
+function mockBroadStoresNear(lat, lng, radiusKm) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  const rKm = Math.min(Math.max(Number(radiusKm) || 3, 0.5), 50);
+  const labels = [
+    ["Neighborhood Market", "Supermarket"],
+    ["Quick Stop Mart", "Convenience store"],
+    ["Fresh Foods Co-op", "Grocery / supermarket"],
+    ["City Grocer", "Supermarket"],
+    ["Express Mini Mart", "Convenience store"],
+    ["Organic Pantry", "Grocery / retail"],
+    ["Family Dollar Foods", "General store"],
+    ["Main Street Foods", "Supermarket"],
+  ];
+  const out = [];
+  for (let i = 0; i < labels.length; i += 1) {
+    const angle = (i / labels.length) * Math.PI * 2;
+    const frac = 0.25 + (i % 4) * 0.15;
+    const dk = rKm * frac;
+    const dLat = (dk / 111) * Math.sin(angle);
+    const dLng = (dk / (111 * Math.cos(deg2rad(la)))) * Math.cos(angle);
+    const plat = la + dLat;
+    const plng = ln + dLng;
+    out.push({
+      id: `mock-retail-${i}`,
+      placeId: `mock-retail-${i}`,
+      name: labels[i][0],
+      address: `${100 + i * 17} Demo Rd (mock data)`,
+      lat: plat,
+      lng: plng,
+      category: labels[i][1],
+      distanceKm: Math.round(distanceKm(la, ln, plat, plng) * 1000) / 1000,
+    });
+  }
+  return out.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
+}
+
 async function findGroceryChains(lat, lng, apiKey) {
   const centerLat = Number(lat);
   const centerLng = Number(lng);
@@ -617,6 +859,84 @@ app.post("/places/grocery-stores", async (req, res) => {
       error: err?.message || "Failed to load stores",
     });
   }
+});
+
+app.post("/places/reverse-geocode", async (req, res) => {
+  const lat = req.body?.lat;
+  const lng = req.body?.lng;
+  if (lat == null || lng == null || Number.isNaN(Number(lat)) || Number.isNaN(Number(lng))) {
+    return res.status(400).json({ error: "Provide lat and lng in the JSON body." });
+  }
+  try {
+    const result = await nominatimReverseGeo(lat, lng);
+    if (!result) {
+      return res.status(502).json({ error: "Reverse geocoding returned no result." });
+    }
+    return res.json(result);
+  } catch (e) {
+    return res.status(502).json({ error: e?.message || String(e) });
+  }
+});
+
+app.post("/places/nearby-food-retail", async (req, res) => {
+  const lat = req.body?.lat;
+  const lng = req.body?.lng;
+  let radiusMeters = Number(req.body?.radiusMeters);
+  if (lat == null || lng == null || Number.isNaN(Number(lat)) || Number.isNaN(Number(lng))) {
+    return res.status(400).json({ error: "Provide lat and lng." });
+  }
+  if (!Number.isFinite(radiusMeters) || radiusMeters <= 0) {
+    radiusMeters = 3000;
+  }
+  radiusMeters = Math.min(Math.max(Math.round(radiusMeters), 100), 50000);
+
+  const la = Number(lat);
+  const ln = Number(lng);
+  const useGoogle = Boolean(GOOGLE_MAPS_API_KEY);
+
+  if (useGoogle) {
+    try {
+      const stores = await googlePlacesBroadFoodRetail(la, ln, radiusMeters, GOOGLE_MAPS_API_KEY);
+      return res.json({
+        lat: la,
+        lng: ln,
+        radiusMeters,
+        stores,
+        source: "google_places",
+        demo: false,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: err?.message || "Nearby search failed" });
+    }
+  }
+
+  try {
+    const stores = await overpassBroadFoodRetail(la, ln, radiusMeters);
+    if (stores.length) {
+      return res.json({
+        lat: la,
+        lng: ln,
+        radiusMeters,
+        stores,
+        source: "osm_overpass",
+        demo: false,
+      });
+    }
+  } catch (e) {
+    console.warn("Broad Overpass retail:", e?.message || e);
+  }
+
+  const radiusKm = radiusMeters / 1000;
+  const stores = mockBroadStoresNear(la, ln, radiusKm);
+  return res.json({
+    lat: la,
+    lng: ln,
+    radiusMeters,
+    stores,
+    source: "mock_fallback",
+    demo: true,
+    note: "No OSM results or API unavailable — mock stores around this point.",
+  });
 });
 
 app.post("/recipes/suggest", async (req, res) => {

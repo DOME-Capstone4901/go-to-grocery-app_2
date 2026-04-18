@@ -83,6 +83,16 @@ export default function Layout() {
       />
 
       <Tabs.Screen
+        name="mapExplorer"
+        options={{
+          title: 'Map',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="map-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
         name="myPantry"
         options={{
           href: null,

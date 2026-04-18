@@ -73,6 +73,25 @@ const STORE_CHAIN_FILTERS = [
   { id: 'aldi', label: 'Aldi' },
 ];
 
+/** Strip backend "(demo …)" labels from store titles; use "nearest" instead. */
+function storeLabelForPlaceQuery(raw) {
+  let s = String(raw ?? '').trim();
+  if (!s) return 'Walmart nearest';
+  s = s.replace(/\s*\(demo[^)]*\)/gi, ' nearest');
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.slice(0, 90);
+}
+
+/** After map search: coordinates plus first store label (demo text → nearest). */
+function placeQueryFromCoordsAndStores(lat, lng, data) {
+  const la = Number(lat);
+  const ln = Number(lng);
+  const coordStr = `${la.toFixed(5)}, ${ln.toFixed(5)}`;
+  const firstName = data?.stores?.[0]?.name?.trim();
+  const storePart = storeLabelForPlaceQuery(firstName);
+  return `${coordStr} ${storePart}`;
+}
+
 export default function SearchScreen() {
   const params = useLocalSearchParams();
   const [searchMode, setSearchMode] = useState('grocery');
@@ -102,6 +121,12 @@ export default function SearchScreen() {
   /** Nominatim location rows from GET /places/geocode-suggest (while typing). */
   const [geocodeApiSuggestions, setGeocodeApiSuggestions] = useState([]);
   const geocodeSuggestSeq = useRef(0);
+  /** When true, next `placeQuery` change skips the debounced text search (map pin filled the field). */
+  const skipPlaceQueryDebounceRef = useRef(false);
+  /** Increment to re-run store search for the same `placeQuery` (Refresh). */
+  const [placeSearchRerun, setPlaceSearchRerun] = useState(0);
+  /** Map tap — store pins show only after user drops this pin. */
+  const [userMapPick, setUserMapPick] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -245,6 +270,10 @@ export default function SearchScreen() {
 
   /** Load stores for the typed area — runs while typing (debounced). */
   useEffect(() => {
+    if (skipPlaceQueryDebounceRef.current) {
+      skipPlaceQueryDebounceRef.current = false;
+      return undefined;
+    }
     const seq = ++placeSearchSeq.current;
     const q = placeQuery.trim();
     if (!q) {
@@ -295,13 +324,13 @@ export default function SearchScreen() {
       cancelled = true;
       clearTimeout(handle);
     };
-  }, [placeQuery]);
+  }, [placeQuery, placeSearchRerun]);
 
   const exploreFromMapCenter = useCallback(async (lat, lng, options = {}) => {
     const force = options.force === true;
     const la = Number(lat);
     const ln = Number(lng);
-    if (!Number.isFinite(la) || !Number.isFinite(ln)) return;
+    if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
 
     if (!isLatLngInsideUnitedStates(la, ln)) {
       setPlacesError(
@@ -309,14 +338,14 @@ export default function SearchScreen() {
       );
       setGroceryStores([]);
       setPlaceLoading(false);
-      return;
+      return null;
     }
 
     if (!force) {
       const prev = lastMapExploreRef.current;
       if (prev) {
         const delta = Math.abs(prev.lat - la) + Math.abs(prev.lng - ln);
-        if (delta < 0.00025) return;
+        if (delta < 0.00025) return null;
       }
     }
 
@@ -325,11 +354,11 @@ export default function SearchScreen() {
     setPlacesError(null);
     try {
       const data = await fetchGroceryChainStores({ lat: la, lng: ln });
-      if (seq !== mapExploreSeq.current) return;
+      if (seq !== mapExploreSeq.current) return null;
       setGroceryStores(data.stores || []);
       setAreaLabel(
         data.locationLabel ||
-          `${Number(data.lat).toFixed(3)}, ${Number(data.lng).toFixed(3)} · ${force ? 'map (double-click)' : 'map'}`
+          `${Number(data.lat).toFixed(3)}, ${Number(data.lng).toFixed(3)} · ${force ? 'map (tap)' : 'map'}`
       );
       setStoreMapCenter({
         lat: Number(data.lat),
@@ -340,9 +369,11 @@ export default function SearchScreen() {
         lng: Number(data.lng),
       };
       setStoreDemoMode(Boolean(data.demo));
+      return data;
     } catch (e) {
-      if (seq !== mapExploreSeq.current) return;
+      if (seq !== mapExploreSeq.current) return null;
       setPlacesError(e?.message || String(e));
+      return null;
     } finally {
       if (seq === mapExploreSeq.current) {
         setPlaceLoading(false);
@@ -350,13 +381,45 @@ export default function SearchScreen() {
     }
   }, []);
 
-  const handleMapDoubleClick = useCallback(
-    (lat, lng) => {
+  const handleMapPick = useCallback(
+    async (lat, lng) => {
+      const la = Number(lat);
+      const ln = Number(lng);
+      if (!Number.isFinite(la) || !Number.isFinite(ln)) return;
+      if (!isLatLngInsideUnitedStates(la, ln)) {
+        setPlacesError('Tap inside the United States to search (US-only).');
+        return;
+      }
+      setPlacesError(null);
       setSelectedStore(null);
-      void exploreFromMapCenter(lat, lng, { force: true });
+      setUserMapPick({ lat: la, lng: ln });
+      Keyboard.dismiss();
+
+      const data = await exploreFromMapCenter(la, ln, { force: true });
+      skipPlaceQueryDebounceRef.current = true;
+      setPlaceQuery(placeQueryFromCoordsAndStores(la, ln, data));
     },
     [exploreFromMapCenter]
   );
+
+  const rerunPlaceSearch = useCallback(async () => {
+    const q = placeQuery.trim();
+    if (!q) return;
+    Keyboard.dismiss();
+    if (
+      userMapPick != null &&
+      Number.isFinite(Number(userMapPick.lat)) &&
+      Number.isFinite(Number(userMapPick.lng))
+    ) {
+      const la = Number(userMapPick.lat);
+      const ln = Number(userMapPick.lng);
+      const data = await exploreFromMapCenter(la, ln, { force: true });
+      skipPlaceQueryDebounceRef.current = true;
+      setPlaceQuery(placeQueryFromCoordsAndStores(la, ln, data));
+      return;
+    }
+    setPlaceSearchRerun(t => t + 1);
+  }, [placeQuery, userMapPick, exploreFromMapCenter]);
 
   const categories = useMemo(
     () => ['All', ...uniq(GROCERY_CATALOG.map(item => item.category)).sort()],
@@ -772,6 +835,13 @@ export default function SearchScreen() {
                   <Text style={styles.searchGoBtnText}>Directions</Text>
                 </Pressable>
                 <Pressable
+                  style={[styles.refreshBtn, !placeQuery.trim() && styles.refreshBtnDisabled]}
+                  onPress={rerunPlaceSearch}
+                  disabled={!placeQuery.trim()}
+                >
+                  <Text style={styles.refreshBtnText}>Refresh</Text>
+                </Pressable>
+                <Pressable
                   style={styles.smallBtn}
                   onPress={() => {
                     setPlaceQuery('');
@@ -788,6 +858,7 @@ export default function SearchScreen() {
                     setSelectedStore(null);
                     setStoreBrandFilter(null);
                     setGeocodeApiSuggestions([]);
+                    setUserMapPick(null);
                     Keyboard.dismiss();
                   }}
                 >
@@ -826,7 +897,9 @@ export default function SearchScreen() {
               <Text style={styles.storeMetaLine}>
                 {placeLoading
                   ? 'Loading…'
-                  : `${groceryStores.length} nearby · WM ${brandCountsInArea.walmart} · KR ${brandCountsInArea.kroger} · ALDI ${brandCountsInArea.aldi}`}
+                  : !userMapPick
+                    ? `${groceryStores.length} in list · tap the map to search this area`
+                    : `${groceryStores.length} nearby · WM ${brandCountsInArea.walmart} · KR ${brandCountsInArea.kroger} · ALDI ${brandCountsInArea.aldi}`}
               </Text>
 
               <View style={styles.brandFilterBlock}>
@@ -863,10 +936,11 @@ export default function SearchScreen() {
                 lng={mapCenterForView.lng}
                 autoFitStores={false}
                 subtitle={areaLabel || undefined}
-                stores={storesInBrandScope}
+                stores={[]}
                 mapKey={mapAnchorKey}
-                onMapIdle={exploreFromMapCenter}
-                onMapDoubleClick={handleMapDoubleClick}
+                pickLat={userMapPick?.lat}
+                pickLng={userMapPick?.lng}
+                onMapClick={handleMapPick}
                 onStoreSelect={handleMapStoreSelect}
                 onStoreDirections={store => {
                   void openDrivingDirections(store);
@@ -1216,6 +1290,26 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '800',
     fontSize: 15,
+  },
+  refreshBtn: {
+    justifyContent: 'center',
+    backgroundColor: palette.greenDeep,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#5a8a4a',
+    borderBottomWidth: 2,
+    borderBottomColor: '#2d4a24',
+    flexShrink: 0,
+    ...shadows.card,
+  },
+  refreshBtnDisabled: {
+    opacity: 0.45,
+  },
+  refreshBtnText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 14,
   },
   suggestHeader: {
     paddingHorizontal: 14,

@@ -28,6 +28,8 @@ function shouldHideGlobalSearch(pathname) {
     pathname.includes('store-shop') ||
     pathname.includes('store-checkout') ||
     pathname.includes('store-orders') ||
+    pathname.includes('map-explorer') ||
+    pathname.includes('mapExplorer') ||
     pathname === '/login'
   ) {
     return true;

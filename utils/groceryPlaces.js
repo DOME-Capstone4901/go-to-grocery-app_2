@@ -98,7 +98,7 @@ function getApiBase() {
 }
 
 /** Try localhost and 127.0.0.1 — some Windows setups only resolve one of them. */
-function getApiBaseCandidates() {
+export function getApiBaseCandidates() {
   const primary = getApiBase();
   const out = new Set([primary]);
   if (primary.includes('://localhost:')) {

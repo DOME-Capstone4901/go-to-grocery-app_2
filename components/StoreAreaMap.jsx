@@ -53,6 +53,9 @@ function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = fa
       if (d && d.type === 'stores' && typeof d.data === 'string' && window.__setStores) {
         window.__setStores(d.data);
       }
+      if (d && d.type === 'userPick' && typeof d.data === 'string' && window.__setUserPick) {
+        window.__setUserPick(d.data);
+      }
     } catch (err) {}
   });`
     : '';
@@ -83,12 +86,25 @@ function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = fa
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
   }).addTo(map);
   var markerLayer = L.layerGroup().addTo(map);
+  var userDotLayer = L.layerGroup().addTo(map);
+  var userDot = null;
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   }
   function escAttr(s) {
     return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  function userPickPopupHtml(plat, plng) {
+    var la = escAttr(String(plat));
+    var ln = escAttr(String(plng));
+    return '<div style="padding:4px 2px 6px;text-align:center;min-width:132px">' +
+      '<button type="button" class="user-pick-search-btn" data-lat="' + la + '" data-lng="' + ln + '" ' +
+      'style="display:block;width:100%;padding:10px 12px;background:#1565c0;color:#fff;border:none;border-radius:10px;font-weight:800;font-size:13px;cursor:pointer;font-family:inherit;box-shadow:0 1px 3px rgba(0,0,0,0.15)">' +
+      'Search here</button>' +
+      '<p style="font-size:10px;color:#666;margin:8px 0 0;line-height:1.35">Nearest Walmart, Kroger & Aldi</p>' +
+      '</div>';
   }
   /** Same rules as mapsDrivingDirectionsUrl (destination-only — for new-tab fallback). */
   function buildGoogleDirectionsHref(s) {
@@ -112,6 +128,35 @@ function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = fa
       return 'https://www.google.com/maps';
     }
   }
+
+  window.__setUserPick = function(jsonStr) {
+    try {
+      var p = JSON.parse(jsonStr);
+      if (p.clear || p.lat == null || !isFinite(Number(p.lat))) {
+        if (userDot) {
+          userDotLayer.removeLayer(userDot);
+          userDot = null;
+        }
+        return;
+      }
+      var plat = Number(p.lat), plng = Number(p.lng);
+      if (!isFinite(plat) || !isFinite(plng)) return;
+      if (!userDot) {
+        userDot = L.circleMarker([plat, plng], {
+          radius: 12,
+          fillColor: '#1e88e5',
+          color: '#ffffff',
+          weight: 3,
+          fillOpacity: 0.95
+        });
+        userDot.bindPopup(userPickPopupHtml(plat, plng));
+        userDot.addTo(userDotLayer);
+      } else {
+        userDot.setLatLng([plat, plng]);
+        userDot.bindPopup(userPickPopupHtml(plat, plng));
+      }
+    } catch (e) {}
+  };
 
   window.__setStores = function(jsonStr) {
     try {
@@ -171,6 +216,17 @@ function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = fa
   map.getContainer().addEventListener('click', function(ev) {
     var t = ev.target;
     if (!t || !t.closest) return;
+    var searchHere = t.closest('.user-pick-search-btn');
+    if (searchHere) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      var sla = Number(searchHere.getAttribute('data-lat'));
+      var sln = Number(searchHere.getAttribute('data-lng'));
+      if (!isFinite(sla) || !isFinite(sln)) return;
+      var payloadSearch = JSON.stringify({ type: 'userPickSearch', lat: sla, lng: sln });
+      ${postToHost.replace(/payload/g, 'payloadSearch')}
+      return;
+    }
     var btn = t.closest('.store-map-dir-btn');
     if (!btn) return;
     ev.preventDefault();
@@ -198,10 +254,9 @@ function buildLeafletHtml(centerLat, centerLng, iframeBridge, autoFitStores = fa
     clearTimeout(idleTimer);
     idleTimer = setTimeout(postIdle, 450);
   });
-  map.doubleClickZoom.disable();
-  map.on('dblclick', function(e) {
+  map.on('click', function(e) {
     var ll = e.latlng;
-    var payload = JSON.stringify({ type: 'mapDoubleClick', lat: ll.lat, lng: ll.lng });
+    var payload = JSON.stringify({ type: 'mapClick', lat: ll.lat, lng: ll.lng });
     ${postToHost}
   });
 })();
@@ -223,8 +278,11 @@ export default function StoreAreaMap({
   onStoreSelect,
   /** Driving directions from pin popup (Google Maps — parent adds GPS origin when available). */
   onStoreDirections,
-  /** Double-click on map background: search stores at that point (US-only in parent). */
-  onMapDoubleClick,
+  /** Single tap on map (not used if omitted). */
+  onMapClick,
+  /** Optional: show a blue “search here” dot at this coordinate (omit to hide). */
+  pickLat,
+  pickLng,
 }) {
   const useIframeMap = shouldUseIframeMap();
   const webRef = useRef(null);
@@ -250,6 +308,11 @@ export default function StoreAreaMap({
   const storesRef = useRef(stores);
   storesRef.current = stores;
 
+  const pickLatRef = useRef(pickLat);
+  const pickLngRef = useRef(pickLng);
+  pickLatRef.current = pickLat;
+  pickLngRef.current = pickLng;
+
   const pushMarkersToWeb = useCallback(() => {
     const payload = JSON.stringify(storesRef.current ?? []);
     if (useIframeMap) {
@@ -265,9 +328,37 @@ export default function StoreAreaMap({
     wv.injectJavaScript(js);
   }, [useIframeMap]);
 
+  const pushUserPickToWeb = useCallback(() => {
+    const pla = pickLatRef.current;
+    const pln = pickLngRef.current;
+    const inner =
+      pla != null &&
+      pln != null &&
+      Number.isFinite(Number(pla)) &&
+      Number.isFinite(Number(pln))
+        ? JSON.stringify({ lat: Number(pla), lng: Number(pln) })
+        : JSON.stringify({ clear: true });
+    if (useIframeMap) {
+      const win = iframeRef.current?.contentWindow;
+      if (win) {
+        win.postMessage(JSON.stringify({ type: 'userPick', data: inner }), '*');
+      }
+      return;
+    }
+    const wv = webRef.current;
+    if (!wv) return;
+    const escaped = JSON.stringify(inner);
+    const js = `(function(){ try { if (window.__setUserPick) window.__setUserPick(${escaped}); } catch(e) {} true; })();`;
+    wv.injectJavaScript(js);
+  }, [useIframeMap]);
+
   useEffect(() => {
     pushMarkersToWeb();
   }, [stores, pushMarkersToWeb]);
+
+  useEffect(() => {
+    pushUserPickToWeb();
+  }, [pickLat, pickLng, pushUserPickToWeb]);
 
   useEffect(() => {
     if (!useIframeMap) return undefined;
@@ -287,12 +378,12 @@ export default function StoreAreaMap({
           onStoreDirections(msg.store);
         }
         if (
-          msg.type === 'mapDoubleClick' &&
+          (msg.type === 'mapClick' || msg.type === 'userPickSearch') &&
           msg.lat != null &&
           msg.lng != null &&
-          onMapDoubleClick
+          onMapClick
         ) {
-          onMapDoubleClick(Number(msg.lat), Number(msg.lng));
+          onMapClick(Number(msg.lat), Number(msg.lng));
         }
       } catch {
         /* ignore */
@@ -303,7 +394,7 @@ export default function StoreAreaMap({
       return () => window.removeEventListener('message', handler);
     }
     return undefined;
-  }, [useIframeMap, onMapIdle, onStoreSelect, onStoreDirections, onMapDoubleClick]);
+  }, [useIframeMap, onMapIdle, onStoreSelect, onStoreDirections, onMapClick]);
 
   if (!coordsValid) {
     return null;
@@ -328,7 +419,9 @@ export default function StoreAreaMap({
   return (
     <View style={styles.wrap}>
       <Text style={styles.title}>Map</Text>
-      <Text style={styles.hint}>Pan, double-click, or tap a pin.</Text>
+      <Text style={styles.hint}>
+        Tap the map to place a pin, then tap Search here in the bubble (or tap the map again) to load nearest stores.
+      </Text>
       {subtitle ? (
         <Text style={styles.subtitle} numberOfLines={2}>
           {subtitle}
@@ -350,7 +443,10 @@ export default function StoreAreaMap({
             backgroundColor: '#dfe5e0',
           }}
           sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-          onLoad={pushMarkersToWeb}
+          onLoad={() => {
+            pushMarkersToWeb();
+            pushUserPickToWeb();
+          }}
         />
       ) : NativeWebView ? (
         <NativeWebView
@@ -362,7 +458,10 @@ export default function StoreAreaMap({
           originWhitelist={['*']}
           javaScriptEnabled
           domStorageEnabled
-          onLoadEnd={pushMarkersToWeb}
+          onLoadEnd={() => {
+            pushMarkersToWeb();
+            pushUserPickToWeb();
+          }}
           onMessage={event => {
             try {
               const msg = JSON.parse(event.nativeEvent.data);
@@ -376,12 +475,12 @@ export default function StoreAreaMap({
                 onStoreDirections(msg.store);
               }
               if (
-                msg.type === 'mapDoubleClick' &&
+                (msg.type === 'mapClick' || msg.type === 'userPickSearch') &&
                 msg.lat != null &&
                 msg.lng != null &&
-                onMapDoubleClick
+                onMapClick
               ) {
-                onMapDoubleClick(Number(msg.lat), Number(msg.lng));
+                onMapClick(Number(msg.lat), Number(msg.lng));
               }
             } catch {
               /* ignore */
@@ -392,20 +491,26 @@ export default function StoreAreaMap({
       ) : null}
 
       <View style={styles.pinFooter}>
-        <View style={styles.legendRow}>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.walmart }]} />
-            <Text style={styles.legendText}>Walmart ({pinCounts.walmart})</Text>
+        {stores.length === 0 ? (
+          <Text style={styles.legendHint}>
+            Blue dot = your search point. Store locations are in the list under the map (not drawn as extra pins).
+          </Text>
+        ) : (
+          <View style={styles.legendRow}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.walmart }]} />
+              <Text style={styles.legendText}>Walmart ({pinCounts.walmart})</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.kroger }]} />
+              <Text style={styles.legendText}>Kroger ({pinCounts.kroger})</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.aldi }]} />
+              <Text style={styles.legendText}>Aldi ({pinCounts.aldi})</Text>
+            </View>
           </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.kroger }]} />
-            <Text style={styles.legendText}>Kroger ({pinCounts.kroger})</Text>
-          </View>
-          <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: BRAND_DOT.aldi }]} />
-            <Text style={styles.legendText}>Aldi ({pinCounts.aldi})</Text>
-          </View>
-        </View>
+        )}
       </View>
     </View>
   );
@@ -476,5 +581,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: palette.text,
+  },
+  legendHint: {
+    fontSize: 12,
+    color: palette.muted,
+    lineHeight: 18,
   },
 });
