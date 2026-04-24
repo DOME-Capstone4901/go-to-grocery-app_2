@@ -104,7 +104,7 @@ export async function scheduleItemExpirationAlert(item) {
       title: 'Item expiring soon',
       body: `${item.name} expires on ${formatExpirationDate(item.expirationDate)}`,
     },
-    trigger: alertDate,
+    trigger: { type: 'date', date: alertDate },
   });
 
   map[itemKey] = notificationId;

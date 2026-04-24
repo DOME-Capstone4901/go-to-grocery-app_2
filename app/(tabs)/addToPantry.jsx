@@ -11,7 +11,7 @@ import { palette, shadows } from '../../utils/theme';
 
 export default function AddPantryItem() {
   const router = useRouter();
-  const { barcode, name: initialName, quantity: initialQuantity, fromGroceryId } =
+  const { barcode, name: initialName, quantity: initialQuantity, fromGroceryId, expirationDate: initialExpDate } =
     useLocalSearchParams();
 
   const [name, setName] = useState('');
@@ -24,6 +24,12 @@ export default function AddPantryItem() {
       setName(`Scanned Item (${barcode})`);
     }
   }, [barcode]);
+
+  useEffect(() => {
+    if (typeof initialExpDate === 'string' && initialExpDate.trim()) {
+      setExpirationDate(initialExpDate);
+    }
+  }, [initialExpDate]);
 
   useEffect(() => {
     if (typeof initialName === 'string' && initialName.trim()) {
