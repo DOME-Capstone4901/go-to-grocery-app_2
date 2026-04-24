@@ -3,7 +3,7 @@ import { View, Text, SectionList, TouchableOpacity, StyleSheet } from 'react-nat
 import { router } from 'expo-router';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 
-import { getDaysUntilExpiration, parseExpirationDate } from '../../utils/expiration';
+import { formatExpirationDate, getDaysUntilExpiration, parseExpirationDate } from '../../utils/expiration';
 import { isLowStock } from '../../utils/lowStock';
 import { deletePantryItem } from '../../utils/pantryStore';
 import { palette, shadows } from '../../utils/theme';
@@ -79,7 +79,7 @@ export default function PantryFilter({ groupedItems }) {
           ) : expiringSoon ? (
             <Text style={styles.soon}>Expires in {days} days</Text>
           ) : (
-            <Text style={styles.date}>Expires: {item.expirationDate}</Text>
+            <Text style={styles.date}>Expires: {formatExpirationDate(item.expirationDate)}</Text>
           )}
         </TouchableOpacity>
       </Swipeable>

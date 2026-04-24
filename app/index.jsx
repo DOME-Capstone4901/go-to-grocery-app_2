@@ -91,9 +91,15 @@ export default function HomeScreen() {
     );
     setSuggestions(getPantrySuggestions(items));
 
-    const recipeSuggestions = await getRecipeSuggestions(items);
-    if (isActive()) {
-      setRecipes(recipeSuggestions);
+    try {
+      const recipeSuggestions = await getRecipeSuggestions(items);
+      if (isActive()) {
+        setRecipes(recipeSuggestions);
+      }
+    } catch {
+      if (isActive()) {
+        setRecipes([]);
+      }
     }
 
     scheduleExpirationAlerts();
@@ -320,6 +326,21 @@ export default function HomeScreen() {
       >
         <View style={styles.buttonInner}>
           <Text style={styles.buttonText}>Grocery List</Text>
+          <Text style={styles.buttonArrow}>{'>'}</Text>
+        </View>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.button}
+        onPress={() =>
+          router.push({
+            pathname: '/Search',
+            params: { mode: 'places' },
+          })
+        }
+      >
+        <View style={styles.buttonInner}>
+          <Text style={styles.buttonText}>Store Finder</Text>
           <Text style={styles.buttonArrow}>{'>'}</Text>
         </View>
       </TouchableOpacity>

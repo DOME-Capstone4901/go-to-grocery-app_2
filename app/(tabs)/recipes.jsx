@@ -1,14 +1,28 @@
 import React, { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { addToGroceryList, getGroceryList } from '../../utils/groceryStore';
 import { getPantryItems } from '../../utils/pantryStore';
 import { getRecipeSuggestions } from '../../utils/recipeAI';
 import { palette, shadows } from '../../utils/theme';
 
+function recipeSearchUrl(recipe) {
+  const terms = [
+    recipe?.name,
+    ...(Array.isArray(recipe?.ingredientsHave) ? recipe.ingredientsHave : []),
+    'recipe',
+  ]
+    .map(value => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ');
+
+  return `https://www.google.com/search?q=${encodeURIComponent(terms)}`;
+}
+
 export default function RecipesTab() {
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState('');
   const groceryNames = new Set(
     getGroceryList()
       .map(item => String(item?.name || '').toLowerCase().trim())
@@ -17,11 +31,22 @@ export default function RecipesTab() {
 
   const refreshRecipes = useCallback(async (isActive = () => true) => {
     setLoading(true);
+    setErrorMsg('');
     const pantryItems = getPantryItems();
-    const nextRecipes = await getRecipeSuggestions(pantryItems);
-    if (isActive()) {
-      setRecipes(nextRecipes);
-      setLoading(false);
+    try {
+      const nextRecipes = await getRecipeSuggestions(pantryItems);
+      if (isActive()) {
+        setRecipes(nextRecipes);
+      }
+    } catch (e) {
+      if (isActive()) {
+        setRecipes([]);
+        setErrorMsg(e?.message || 'Recipe AI is unavailable right now.');
+      }
+    } finally {
+      if (isActive()) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -52,6 +77,10 @@ export default function RecipesTab() {
         <View style={styles.emptyCard}>
           <Text style={styles.emptyText}>Loading recipe ideas...</Text>
         </View>
+      ) : errorMsg ? (
+        <View style={styles.emptyCard}>
+          <Text style={styles.errorText}>{errorMsg}</Text>
+        </View>
       ) : recipes.length === 0 ? (
         <View style={styles.emptyCard}>
           <Text style={styles.emptyText}>
@@ -74,6 +103,14 @@ export default function RecipesTab() {
           return (
             <View key={`${recipe.name}-${index}`} style={styles.recipeCard}>
               <Text style={styles.recipeName}>{recipe.name}</Text>
+              {!!recipe.whyMatches && (
+                <Text style={styles.recipeMeta}>{recipe.whyMatches}</Text>
+              )}
+              <Text style={styles.recipeMeta}>
+                {recipe.timeMinutes ? `${recipe.timeMinutes} min` : 'Time n/a'} ·{' '}
+                {recipe.estimatedCost != null ? `$${recipe.estimatedCost.toFixed(2)}` : 'Cost n/a'}
+                {recipe.servings ? ` · ${recipe.servings} servings` : ''}
+              </Text>
               {recipe.canCookNow ? (
                 <Text style={styles.readyText}>You can cook this now</Text>
               ) : waitingOnPurchase ? (
@@ -97,6 +134,15 @@ export default function RecipesTab() {
                   <Text style={styles.addButtonText}>Add Missing To Grocery List</Text>
                 </Pressable>
               )}
+
+              <Pressable
+                style={styles.linkButton}
+                onPress={() => {
+                  Linking.openURL(recipeSearchUrl(recipe)).catch(() => {});
+                }}
+              >
+                <Text style={styles.linkButtonText}>Find Recipe Online</Text>
+              </Pressable>
             </View>
           );
         })
@@ -158,6 +204,11 @@ const styles = StyleSheet.create({
     color: palette.muted,
     fontSize: 15,
   },
+  errorText: {
+    color: palette.peachDeep,
+    fontSize: 15,
+    lineHeight: 21,
+  },
   recipeCard: {
     backgroundColor: palette.surface,
     borderRadius: 12,
@@ -171,6 +222,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: palette.greenDeep,
+  },
+  recipeMeta: {
+    marginTop: 6,
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 18,
   },
   readyText: {
     marginTop: 6,
@@ -200,6 +257,18 @@ const styles = StyleSheet.create({
     borderBottomColor: '#A75740',
   },
   addButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  linkButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: palette.greenDeep,
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+  },
+  linkButtonText: {
     color: '#fff',
     fontWeight: '700',
   },

@@ -34,8 +34,8 @@ export default function GroceryList() {
     const q = input.trim().toLowerCase();
     if (!q) return US_GROCERY_PRODUCTS;
     return US_GROCERY_PRODUCTS.filter(p => {
-      const hay = `${p.name} ${p.category}`.toLowerCase();
-      if (hay.includes(q)) return true;
+      if (p.name.toLowerCase().includes(q)) return true;
+      if (String(p.unit || '').toLowerCase().includes(q)) return true;
       return p.name.toLowerCase().split(/\s+/).some(w => w.startsWith(q));
     });
   }, [input]);
@@ -178,7 +178,6 @@ export default function GroceryList() {
                 Matched: {match.name}
               </Text>
               <Text style={styles.priceLine}>
-                {match.unit === 'lb' ? 'Est. per lb · ' : 'Est. each · '}
                 WM {formatMoney(pw)} · KR {formatMoney(pk)} · ALDI {formatMoney(pa)}
                 {cheapestLabel}
               </Text>
@@ -282,6 +281,19 @@ export default function GroceryList() {
             </Text>
           </Pressable>
         </View>
+        <Pressable
+          style={styles.compareStoresButton}
+          onPress={() =>
+            router.push({
+              pathname: '/Search',
+              params: { mode: 'places' },
+            })
+          }
+        >
+          <Text style={styles.compareStoresButtonText}>
+            Compare Nearby Store Prices
+          </Text>
+        </Pressable>
 
         <View style={styles.inputSection}>
           <TextInput
@@ -334,7 +346,6 @@ export default function GroceryList() {
               <View style={styles.catalogRow}>
                 <View style={{ flex: 1, paddingRight: 10 }}>
                   <Text style={styles.catalogName}>{item.name}</Text>
-                  <Text style={styles.catalogMeta}>{item.category} · {item.unit === 'lb' ? 'per lb' : 'each'}</Text>
                   <Text style={styles.catalogPrice}>
                     WM {formatMoney(item.prices.walmart)} · KR {formatMoney(item.prices.kroger)} · ALDI {formatMoney(item.prices.aldi)}
                   </Text>
@@ -450,6 +461,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 10,
+  },
+  compareStoresButton: {
+    alignSelf: 'flex-start',
+    marginBottom: 10,
+    backgroundColor: palette.greenDeep,
+    borderRadius: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+  },
+  compareStoresButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 13,
   },
   input: {
     flex: 1,

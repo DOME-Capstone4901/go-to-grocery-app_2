@@ -28,10 +28,6 @@ import { searchUsZipCodes } from '../utils/locationSearch';
 import { getStoreCartCount } from '../utils/storeCartStore';
 import { palette, shadows } from '../utils/theme';
 
-function uniq(arr) {
-  return Array.from(new Set(arr));
-}
-
 export default function SearchScreen() {
   const params = useLocalSearchParams();
   const [searchMode, setSearchMode] = useState('grocery');
@@ -41,10 +37,8 @@ export default function SearchScreen() {
   const [areaLabel, setAreaLabel] = useState('');
   const [placesError, setPlacesError] = useState(null);
   const [storeMapCenter, setStoreMapCenter] = useState(null);
-  const [storeDemoMode, setStoreDemoMode] = useState(false);
   const [placeLoading, setPlaceLoading] = useState(false);
   const placeSearchSeq = useRef(0);
-  const [selectedCategory, setSelectedCategory] = useState('All');
   const [recent, setRecent] = useState([]);
   const [sortAZ, setSortAZ] = useState(true);
   const [addedIds, setAddedIds] = useState([]);
@@ -76,7 +70,6 @@ export default function SearchScreen() {
       setAreaLabel('');
       setPlacesError(null);
       setStoreMapCenter(null);
-      setStoreDemoMode(false);
       setPlaceLoading(false);
       return;
     }
@@ -98,14 +91,12 @@ export default function SearchScreen() {
           lat: Number(data.lat),
           lng: Number(data.lng),
         });
-        setStoreDemoMode(Boolean(data.demo));
       } catch (e) {
         if (cancelled || seq !== placeSearchSeq.current) return;
         setPlacesError(e?.message || String(e));
         setGroceryStores([]);
         setAreaLabel('');
         setStoreMapCenter(null);
-        setStoreDemoMode(false);
       } finally {
         if (!cancelled && seq === placeSearchSeq.current) {
           setPlaceLoading(false);
@@ -118,18 +109,13 @@ export default function SearchScreen() {
     };
   }, [placeQuery]);
 
-  const categories = useMemo(
-    () => ['All', ...uniq(GROCERY_CATALOG.map(item => item.category)).sort()],
-    []
-  );
-
   const filtered = useMemo(() => {
-    const list = filterGroceryByQuery(GROCERY_CATALOG, query, selectedCategory);
+    const list = filterGroceryByQuery(GROCERY_CATALOG, query);
     return [...list].sort((a, b) => {
       const cmp = a.name.localeCompare(b.name);
       return sortAZ ? cmp : -cmp;
     });
-  }, [query, selectedCategory, sortAZ]);
+  }, [query, sortAZ]);
 
   const suggestions = useMemo(
     () => getGrocerySuggestions(query, 10),
@@ -262,7 +248,6 @@ export default function SearchScreen() {
                   }}
                 >
                   <Text style={styles.suggestText}>{item.name}</Text>
-                  <Text style={styles.suggestMuted}>{item.category}</Text>
                 </Pressable>
               ))}
             </View>
@@ -291,30 +276,6 @@ export default function SearchScreen() {
             </View>
           )}
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Category</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chipRow}
-            >
-              {categories.map(category => {
-                const active = category === selectedCategory;
-                return (
-                  <Pressable
-                    key={category}
-                    style={[styles.chip, active && styles.chipActive]}
-                    onPress={() => setSelectedCategory(category)}
-                  >
-                    <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                      {category}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-
           <View style={styles.controlsRow}>
             <Text style={styles.metaText}>
               Showing {filtered.length} / {GROCERY_CATALOG.length}
@@ -329,7 +290,6 @@ export default function SearchScreen() {
                 style={styles.smallBtn}
                 onPress={() => {
                   setQuery('');
-                  setSelectedCategory('All');
                 }}
               >
                 <Text style={styles.smallBtnText}>Reset</Text>
@@ -349,7 +309,6 @@ export default function SearchScreen() {
                 <View style={styles.row}>
                   <View>
                     <Text style={styles.itemName}>{item.name}</Text>
-                    <Text style={styles.itemCategory}>{item.category}</Text>
                   </View>
 
                   <Pressable
@@ -442,19 +401,11 @@ export default function SearchScreen() {
                 setAreaLabel('');
                 setPlacesError(null);
                 setStoreMapCenter(null);
-                setStoreDemoMode(false);
               }}
             >
               <Text style={styles.smallBtnText}>Clear</Text>
             </Pressable>
           </View>
-
-          {storeDemoMode ? (
-            <Text style={styles.demoBanner}>
-              Demo mode: pins are placeholders. Add GOOGLE_MAPS_API_KEY to recipe-backend/.env for real
-              Walmart / Kroger / Aldi from Google Places.
-            </Text>
-          ) : null}
 
           <FlatList
             data={groceryStores}
@@ -516,7 +467,7 @@ export default function SearchScreen() {
                     ? 'Searching…'
                     : placeQuery.trim()
                       ? 'No Walmart, Kroger, or Aldi found in that area (try another ZIP or city).'
-                      : 'Enter a US ZIP or city + state. Run recipe-backend with GOOGLE_MAPS_API_KEY and set EXPO_PUBLIC_RECIPE_API_URL.'}
+                      : 'Enter a US ZIP or city + state. Set EXPO_PUBLIC_RECIPE_API_URL and run recipe-backend with GOOGLE_MAPS_API_KEY.'}
                 </Text>
               </View>
             }
@@ -602,18 +553,6 @@ const styles = StyleSheet.create({
     color: palette.peachDeep,
     fontSize: 13,
     lineHeight: 18,
-  },
-  demoBanner: {
-    marginTop: 8,
-    marginBottom: 4,
-    padding: 10,
-    borderRadius: 10,
-    backgroundColor: palette.surfaceAlt,
-    borderWidth: 1,
-    borderColor: palette.border,
-    color: palette.muted,
-    fontSize: 12,
-    lineHeight: 17,
   },
   brandBadge: {
     fontSize: 11,

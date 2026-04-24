@@ -1,29 +1,5 @@
 import { getPantryItems } from './pantryStore';
-import { RECIPES } from './recipes';
-
-const BACKEND_URL =
-  process.env.EXPO_PUBLIC_RECIPE_BACKEND_URL || 'http://localhost:3000';
-
-function getLocalRecipeSuggestions(items) {
-  const pantry = items.map(i => i.name.toLowerCase());
-  const suggestions = [];
-
-  for (const recipe of RECIPES) {
-    const missing = recipe.ingredients.filter(
-      ing => !pantry.includes(ing.toLowerCase())
-    );
-
-    if (missing.length <= recipe.missingAllowed) {
-      suggestions.push({
-        name: recipe.name,
-        missing,
-        canCookNow: missing.length === 0,
-      });
-    }
-  }
-
-  return suggestions;
-}
+import { getRecipeApiBase } from './apiBase';
 
 function mapBackendRecipes(recipes) {
   return recipes.map(recipe => {
@@ -41,6 +17,15 @@ function mapBackendRecipes(recipes) {
       name: recipe.title || 'Recipe',
       missing,
       canCookNow: missing.length === 0,
+      whyMatches: recipe.whyMatches || '',
+      ingredientsNeed: missing,
+      ingredientsHave: Array.isArray(recipe.ingredientsHave) ? recipe.ingredientsHave : [],
+      estimatedCost:
+        typeof recipe.estimatedCost === 'number' ? recipe.estimatedCost : null,
+      timeMinutes:
+        typeof recipe.timeMinutes === 'number' ? recipe.timeMinutes : null,
+      servings: typeof recipe.servings === 'number' ? recipe.servings : null,
+      url: recipe.url || '',
     };
   });
 }
@@ -55,8 +40,10 @@ export async function getRecipeSuggestions(pantryItems = getPantryItems()) {
     return [];
   }
 
+  const apiBase = getRecipeApiBase();
+
   try {
-    const response = await fetch(`${BACKEND_URL}/recipes/suggest`, {
+    const response = await fetch(`${apiBase}/recipes/suggest`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -64,11 +51,14 @@ export async function getRecipeSuggestions(pantryItems = getPantryItems()) {
         restrictions: [],
         budget: 20,
         budgetType: 'per_meal',
+        maxMissingItems: 2,
+        maxResults: 6,
       }),
     });
 
     if (!response.ok) {
-      throw new Error(`Recipe request failed: ${response.status}`);
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data?.error || `Recipe request failed: ${response.status}`);
     }
 
     const data = await response.json();
@@ -77,9 +67,10 @@ export async function getRecipeSuggestions(pantryItems = getPantryItems()) {
     if (backendRecipes.length) {
       return mapBackendRecipes(backendRecipes);
     }
-  } catch {
-    // Fall back to local static matching when backend is unavailable.
+  } catch (e) {
+    console.warn('getRecipeSuggestions:', e?.message || e);
+    throw e;
   }
 
-  return getLocalRecipeSuggestions(items);
+  return [];
 }

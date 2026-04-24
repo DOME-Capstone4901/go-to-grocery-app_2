@@ -88,6 +88,20 @@ export default function Layout() {
           href: null,
         }}
       />
+
+      <Tabs.Screen
+        name="home"
+        options={{
+          href: null,
+        }}
+      />
+
+      <Tabs.Screen
+        name="pantry"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }

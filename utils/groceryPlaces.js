@@ -1,4 +1,5 @@
 const zipcodes = require('zipcodes');
+import { getRecipeApiBase } from './apiBase';
 
 /**
  * Resolve US city+state or ZIP to coordinates using the bundled `zipcodes` DB (no Google call).
@@ -66,30 +67,8 @@ export function resolveSearchToLocation(raw) {
   return null;
 }
 
-const DEFAULT_API_PORT = 3000;
-
-/**
- * Store API base URL.
- * - EXPO_PUBLIC_RECIPE_API_URL overrides everything when set.
- * - On web, uses the same hostname as the page (fixes localhost vs 127.0.0.1 mismatch).
- * - On native, defaults to localhost unless you set the env (use your machine IP on a real device).
- */
-function getApiBase() {
-  if (typeof process !== 'undefined' && process.env.EXPO_PUBLIC_RECIPE_API_URL) {
-    return String(process.env.EXPO_PUBLIC_RECIPE_API_URL).replace(/\/$/, '');
-  }
-  if (typeof window !== 'undefined' && window.location?.hostname) {
-    const { hostname } = window.location;
-    if (hostname) {
-      return `http://${hostname}:${DEFAULT_API_PORT}`;
-    }
-  }
-  return `http://localhost:${DEFAULT_API_PORT}`;
-}
-
 /**
  * Loads Walmart, Kroger, and Aldi near a point via the recipe backend (Google Places Nearby Search).
- * Google Cloud billing applies; many projects get $200/mo credit — not unlimited “free.”
  */
 export async function fetchGroceryChainStores(params = {}) {
   const { lat, lng, query } = params;
@@ -100,7 +79,7 @@ export async function fetchGroceryChainStores(params = {}) {
   }
   const body = hasCoords ? { lat: Number(lat), lng: Number(lng) } : { query: q };
 
-  const apiBase = getApiBase();
+  const apiBase = getRecipeApiBase();
   const url = `${apiBase}/places/grocery-stores`;
 
   let res;
@@ -118,7 +97,7 @@ export async function fetchGroceryChainStores(params = {}) {
       e?.name === 'TypeError';
     if (isNetwork) {
       throw new Error(
-        `Cannot reach the store API at ${apiBase}. In a separate terminal run: cd recipe-backend && npm start (needs GOOGLE_MAPS_API_KEY in recipe-backend/.env). Ensure nothing else uses port 3000.`
+        `Cannot reach the store API at ${apiBase}. Start backend in recipe-backend and verify EXPO_PUBLIC_RECIPE_API_URL points to it.`
       );
     }
     throw e;

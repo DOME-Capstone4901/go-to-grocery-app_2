@@ -75,15 +75,22 @@ export default function StoreShopScreen() {
         contentContainerStyle={styles.list}
         renderItem={({ item }) => {
           const price = priceForBrand(item, brand);
+          const pw = Number(item?.prices?.walmart ?? 0);
+          const pk = Number(item?.prices?.kroger ?? 0);
+          const pa = Number(item?.prices?.aldi ?? 0);
+          const min = Math.min(pw, pk, pa);
+          const cheapestChain =
+            min === pa ? 'Aldi' : min === pk ? 'Kroger' : 'Walmart';
           const q = qtyForProduct(placeId, item.id);
           return (
             <View style={styles.row}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.itemName}>{item.name}</Text>
-                <Text style={styles.meta}>
-                  {item.category} · {item.unit}
-                </Text>
                 <Text style={styles.price}>{formatMoney(price)}</Text>
+                <Text style={styles.compare}>
+                  WM {formatMoney(pw)} · KR {formatMoney(pk)} · ALDI {formatMoney(pa)}
+                </Text>
+                <Text style={styles.cheapest}>Lowest: {cheapestChain} {formatMoney(min)}</Text>
                 {q > 0 ? (
                   <Text style={styles.inCart}>In cart: {q}</Text>
                 ) : null}
@@ -160,6 +167,17 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '800',
     color: palette.greenDeep,
+  },
+  compare: {
+    marginTop: 4,
+    color: palette.muted,
+    fontSize: 12,
+  },
+  cheapest: {
+    marginTop: 2,
+    color: palette.orange,
+    fontSize: 12,
+    fontWeight: '700',
   },
   inCart: { marginTop: 4, fontSize: 12, fontWeight: '600', color: palette.orange },
   addBtn: {

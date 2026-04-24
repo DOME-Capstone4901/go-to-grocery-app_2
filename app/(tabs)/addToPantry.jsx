@@ -6,6 +6,7 @@ import { Picker } from '@react-native-picker/picker';
 import { deleteGroceryItem } from '../../utils/groceryStore';
 import { formatExpirationDate, parseExpirationDate } from '../../utils/expiration';
 import { scheduleItemExpirationAlert } from '../../utils/notifications';
+import { PANTRY_CATEGORIES, guessCategoryForItem } from '../../utils/categoryMatch';
 import { palette, shadows } from '../../utils/theme';
 
 export default function AddPantryItem() {
@@ -27,12 +28,24 @@ export default function AddPantryItem() {
   useEffect(() => {
     if (typeof initialName === 'string' && initialName.trim()) {
       setName(initialName);
+      const guessed = guessCategoryForItem(initialName);
+      if (guessed) {
+        setCategory(guessed);
+      }
     }
 
     if (typeof initialQuantity === 'string' && initialQuantity.trim()) {
       setQuantity(initialQuantity);
     }
   }, [initialName, initialQuantity]);
+
+  const updateName = value => {
+    setName(value);
+    const guessed = guessCategoryForItem(value);
+    if (guessed) {
+      setCategory(guessed);
+    }
+  };
 
   const handleAdd = async () => {
     const trimmedName = name.trim();
@@ -45,14 +58,14 @@ export default function AddPantryItem() {
     }
 
     if (!Number.isFinite(parsedQuantity) || parsedQuantity <= 0) {
-      Alert.alert('Invalid quantity', 'Quantity must be a number greater than 0.');
+      Alert.alert('Invalid count/lb', 'Count/Lb must be a number greater than 0.');
       return;
     }
 
     if (!parsedDate) {
       Alert.alert(
         'Invalid expiration date',
-        'Use YYYY-MM-DD or MM-DD-YYYY for the expiration date.'
+        'Use MM/DD/YYYY for the expiration date.'
       );
       return;
     }
@@ -82,27 +95,25 @@ export default function AddPantryItem() {
         <TextInput
           placeholder="Item name"
           value={name}
-          onChangeText={setName}
+          onChangeText={updateName}
           style={styles.input}
           placeholderTextColor={palette.muted}
         />
 
         <Text style={styles.fieldLabel}>Category</Text>
         <View style={styles.pickerWrap}>
-          <Picker selectedValue={category} onValueChange={value => setCategory(value)}>
-            <Picker.Item label="Produce" value="Produce" />
-            <Picker.Item label="Dairy" value="Dairy" />
-            <Picker.Item label="Meat" value="Meat" />
-            <Picker.Item label="Snacks" value="Snacks" />
-            <Picker.Item label="Beverages" value="Beverages" />
-            <Picker.Item label="Grains" value="Grains" />
-            <Picker.Item label="Bread" value="Bread" />
-            <Picker.Item label="Canned Goods" value="Canned Goods" />
+          <Picker
+            selectedValue={category}
+            onValueChange={setCategory}
+          >
+            {PANTRY_CATEGORIES.map(option => (
+              <Picker.Item key={option} label={option} value={option} />
+            ))}
           </Picker>
         </View>
 
         <TextInput
-          placeholder="Quantity"
+          placeholder="Count/Lb"
           value={quantity}
           onChangeText={setQuantity}
           keyboardType="numeric"
@@ -111,7 +122,7 @@ export default function AddPantryItem() {
         />
 
         <TextInput
-          placeholder="Expiration Date (YYYY-MM-DD)"
+          placeholder="Expiration Date (MM/DD/YYYY)"
           value={expirationDate}
           onChangeText={setExpirationDate}
           style={styles.input}

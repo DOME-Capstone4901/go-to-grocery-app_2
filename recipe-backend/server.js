@@ -85,57 +85,6 @@ async function googleNearbySearch(lat, lng, keyword, apiKey) {
   return Array.isArray(data.results) ? data.results : [];
 }
 
-/** Demo stores when GOOGLE_MAPS_API_KEY is not set (UI works; not real Places data). */
-function mockGroceryChainsNear(lat, lng) {
-  const centerLat = Number(lat);
-  const centerLng = Number(lng);
-  const offsets = [
-    { brand: "walmart", name: "Walmart (demo — set GOOGLE_MAPS_API_KEY for live results)", dLat: 0.04, dLng: 0.02 },
-    { brand: "kroger", name: "Kroger (demo)", dLat: -0.03, dLng: 0.035 },
-    { brand: "aldi", name: "Aldi (demo)", dLat: 0.015, dLng: -0.04 },
-  ];
-  return offsets.map((o, i) => {
-    const plat = centerLat + o.dLat;
-    const plng = centerLng + o.dLng;
-    return {
-      id: `demo-${o.brand}-${i}`,
-      placeId: `demo-${o.brand}-${i}`,
-      brand: o.brand,
-      name: o.name,
-      address: "Demo pin near search area",
-      lat: plat,
-      lng: plng,
-      miles: Math.round(distanceMiles(centerLat, centerLng, plat, plng) * 10) / 10,
-    };
-  });
-}
-
-async function nominatimGeocode(query) {
-  const q = String(query || "").trim();
-  if (!q) return null;
-  const url = new URL("https://nominatim.openstreetmap.org/search");
-  url.searchParams.set("format", "json");
-  url.searchParams.set("limit", "1");
-  url.searchParams.set("q", q);
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "go-to-grocery-app/1.0 (recipe-backend dev)",
-      Accept: "application/json",
-    },
-  });
-  const data = await response.json().catch(() => []);
-  const hit = Array.isArray(data) ? data[0] : null;
-  if (!hit) return null;
-  const la = Number(hit.lat);
-  const ln = Number(hit.lon);
-  if (!Number.isFinite(la) || !Number.isFinite(ln)) return null;
-  return {
-    lat: la,
-    lng: ln,
-    formatted: hit.display_name || q,
-  };
-}
-
 async function findGroceryChains(lat, lng, apiKey) {
   const centerLat = Number(lat);
   const centerLng = Number(lng);
@@ -178,8 +127,8 @@ async function findGroceryChains(lat, lng, apiKey) {
   return out;
 }
 
-const MODEL = "gemini-2.5-flash";
-const FALLBACK_MODEL = "gemini-1.5-flash";
+const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || "";
 
 function normalizeStringArray(value) {
   if (!Array.isArray(value)) return [];
@@ -252,7 +201,9 @@ Budget: ${budget} (${budgetType})
 
 Rules:
 - Prefer real, common recipes.
-- Include a real recipe URL from a known cooking site when possible.
+- Return a varied mix of cuisines when possible: American/home-style, Mediterranean, Mexican, Italian, Indian, and one Asian-style recipe at most.
+- Do not return mostly Asian-style recipes unless the ingredients strongly require it.
+- The "url" field may be empty. Do not invent exact recipe page URLs.
 - If one small ingredient is missing, set "missingItem" and "substitution".
 - Keep steps concise and clear.
 - Return only JSON.
@@ -279,7 +230,7 @@ Return this exact shape:
 }
 
 async function callGemini(prompt, modelName) {
-  const endpoint = `https://generativelanguage.googleapis.com/v1/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`;
 
   const response = await fetch(endpoint, {
     method: "POST",
@@ -287,7 +238,6 @@ async function callGemini(prompt, modelName) {
     body: JSON.stringify({
       generationConfig: {
         temperature: 0.4,
-        responseMimeType: "application/json",
       },
       contents: [{ parts: [{ text: prompt }] }],
     }),
@@ -312,12 +262,16 @@ app.get("/health", (_req, res) => {
     port: PORT,
     geminiConfigured: Boolean(GEMINI_API_KEY),
     googleMapsConfigured: Boolean(GOOGLE_MAPS_API_KEY),
-    storeSearchMode: GOOGLE_MAPS_API_KEY ? "google_places" : "demo_pins",
+    storeSearchMode: "google_places",
   });
 });
 
 app.post("/places/grocery-stores", async (req, res) => {
-  const useGoogle = Boolean(GOOGLE_MAPS_API_KEY);
+  if (!GOOGLE_MAPS_API_KEY) {
+    return res.status(500).json({
+      error: "Server is missing GOOGLE_MAPS_API_KEY",
+    });
+  }
 
   let lat = req.body?.lat;
   let lng = req.body?.lng;
@@ -325,35 +279,16 @@ app.post("/places/grocery-stores", async (req, res) => {
   let locationLabel = null;
 
   if ((lat == null || lng == null) && q) {
-    if (useGoogle) {
-      const geo = await googleGeocode(q, GOOGLE_MAPS_API_KEY);
-      if (!geo) {
-        return res.status(400).json({
-          error:
-            "Could not resolve that location. Try a US ZIP (5 digits), or City, ST (e.g. Austin, TX).",
-        });
-      }
-      lat = geo.lat;
-      lng = geo.lng;
-      locationLabel = geo.formatted;
-    } else {
-      try {
-        const geo = await nominatimGeocode(q);
-        if (!geo) {
-          return res.status(400).json({
-            error:
-              "Could not geocode that text. Try a US ZIP or City, ST, or add GOOGLE_MAPS_API_KEY.",
-          });
-        }
-        lat = geo.lat;
-        lng = geo.lng;
-        locationLabel = geo.formatted;
-      } catch (e) {
-        return res.status(502).json({
-          error: `Geocoding failed (${e?.message || e}). Try again or use coordinates from the app.`,
-        });
-      }
+    const geo = await googleGeocode(q, GOOGLE_MAPS_API_KEY);
+    if (!geo) {
+      return res.status(400).json({
+        error:
+          "Could not resolve that location. Try a US ZIP (5 digits), or City, ST (e.g. Austin, TX).",
+      });
     }
+    lat = geo.lat;
+    lng = geo.lng;
+    locationLabel = geo.formatted;
   }
 
   if (
@@ -370,18 +305,6 @@ app.post("/places/grocery-stores", async (req, res) => {
   const latN = Number(lat);
   const lngN = Number(lng);
 
-  if (!useGoogle) {
-    const stores = mockGroceryChainsNear(latN, lngN);
-    return res.json({
-      lat: latN,
-      lng: lngN,
-      locationLabel,
-      stores,
-      brands: GROCERY_BRANDS.map((b) => b.id),
-      demo: true,
-    });
-  }
-
   try {
     const stores = await findGroceryChains(latN, lngN, GOOGLE_MAPS_API_KEY);
     return res.json({
@@ -390,7 +313,6 @@ app.post("/places/grocery-stores", async (req, res) => {
       locationLabel,
       stores,
       brands: GROCERY_BRANDS.map((b) => b.id),
-      demo: false,
     });
   } catch (err) {
     return res.status(500).json({
@@ -427,11 +349,13 @@ app.post("/recipes/suggest", async (req, res) => {
   const prompt = buildPrompt({ ingredients, restrictions, budget, budgetType });
 
   try {
-    // Retry once with a fallback model for resilience.
     let result;
     try {
       result = await callGemini(prompt, MODEL);
-    } catch {
+    } catch (primaryError) {
+      if (!FALLBACK_MODEL) {
+        throw primaryError;
+      }
       result = await callGemini(prompt, FALLBACK_MODEL);
     }
     return res.json(result);

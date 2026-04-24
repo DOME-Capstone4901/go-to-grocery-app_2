@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import { getPantryItems, deletePantryItem } from '../utils/pantryStore';
-import { getDaysUntilExpiration } from '../utils/expiration';
+import { formatExpirationDate, getDaysUntilExpiration } from '../utils/expiration';
 import { addToGroceryList } from '../utils/groceryStore';
 import { palette, shadows } from '../utils/theme';
 
@@ -46,7 +46,7 @@ export default function Details() {
           : `Expires in ${daysUntil} days`}
       </Text>
 
-      <Text style={styles.subtitle}>Date: {item.expirationDate}</Text>
+      <Text style={styles.subtitle}>Date: {formatExpirationDate(item.expirationDate)}</Text>
 
       <Pressable
         style={styles.restockButton}

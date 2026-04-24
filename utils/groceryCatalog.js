@@ -5,11 +5,11 @@ import { US_GROCERY_PRODUCTS } from '../data/usGroceryCatalog';
 export const GROCERY_CATALOG = US_GROCERY_PRODUCTS.map(item => ({
   id: item.id,
   name: item.name,
-  category: item.category,
+  unit: item.unit,
 }));
 
 /**
- * Ranked suggestions — works with a single letter (name, category, word-start).
+ * Ranked suggestions — works with a single letter (name/word-start).
  */
 export function getGrocerySuggestions(raw, limit = 10) {
   const q = raw.trim().toLowerCase();
@@ -18,7 +18,6 @@ export function getGrocerySuggestions(raw, limit = 10) {
   const scored = [];
   for (const item of GROCERY_CATALOG) {
     const name = item.name.toLowerCase();
-    const cat = item.category.toLowerCase();
     let score = 0;
 
     if (name === q) score += 220;
@@ -26,10 +25,6 @@ export function getGrocerySuggestions(raw, limit = 10) {
     const words = name.split(/\s+/);
     if (words.some(w => w.startsWith(q))) score += 85;
     if (name.includes(q)) score += 55;
-
-    if (cat === q) score += 70;
-    if (cat.startsWith(q)) score += 50;
-    if (cat.includes(q)) score += 28;
 
     if (score === 0 && q.length === 1) {
       if (name.includes(q)) score += 20;
@@ -46,15 +41,12 @@ export function getGrocerySuggestions(raw, limit = 10) {
 }
 
 export function filterGroceryByQuery(items, query, selectedCategory) {
+  void selectedCategory;
   const q = query.trim().toLowerCase();
-  let list = items;
-  if (selectedCategory !== 'All') {
-    list = list.filter(item => item.category === selectedCategory);
-  }
-  if (!q) return list;
-  return list.filter(item => {
-    const hay = `${item.name} ${item.category}`.toLowerCase();
-    if (hay.includes(q)) return true;
+  if (!q) return items;
+  return items.filter(item => {
+    if (item.name.toLowerCase().includes(q)) return true;
+    if (String(item.unit || '').toLowerCase().includes(q)) return true;
     return item.name.toLowerCase().split(/\s+/).some(w => w.startsWith(q));
   });
 }

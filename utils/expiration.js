@@ -26,7 +26,7 @@ export function parseExpirationDate(value) {
     return null;
   }
 
-  match = trimmed.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  match = trimmed.match(/^(\d{2})[/-](\d{2})[/-](\d{4})$/);
   if (match) {
     const [, month, day, year] = match;
     const parsed = new Date(Number(year), Number(month) - 1, Number(day));
@@ -53,7 +53,7 @@ export function formatExpirationDate(value) {
   const year = parsed.getFullYear();
   const month = String(parsed.getMonth() + 1).padStart(2, '0');
   const day = String(parsed.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return `${month}/${day}/${year}`;
 }
 
 export const getDaysUntilExpiration = expirationDate => {
