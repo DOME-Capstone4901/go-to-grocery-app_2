@@ -27,7 +27,8 @@ export default function AddPantryItem() {
 
   useEffect(() => {
     if (typeof initialExpDate === 'string' && initialExpDate.trim()) {
-      setExpirationDate(initialExpDate);
+      const parsed = parseExpirationDate(initialExpDate);
+      setExpirationDate(parsed ? formatExpirationDate(parsed) : initialExpDate);
     }
   }, [initialExpDate]);
 

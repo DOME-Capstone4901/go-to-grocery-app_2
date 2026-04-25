@@ -18,6 +18,8 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const FRAME_SIZE = Math.min(Math.round(SCREEN_W * 0.72), 290);
 const FRAME_TOP = Math.round((SCREEN_H - FRAME_SIZE) / 2) - 50;
 const FRAME_LEFT = Math.round((SCREEN_W - FRAME_SIZE) / 2);
+const THIS_YEAR = new Date().getFullYear();
+const OCR_TIMEOUT_MS = 15000;
 
 const BARCODE_TYPES = [
   'ean13', 'ean8', 'upc_a', 'upc_e',
@@ -30,17 +32,47 @@ const MONTH_MAP = {
   JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12',
 };
 
-function parseOcrDate(text) {
+// Correct common OCR misreads in numeric contexts: O→0 and I→1.
+// Patterns are constrained so month names (OCT, JAN, etc.) are not affected.
+function fixOcrArtifacts(text) {
+  return text
+    .replace(/(\d)O(\d)/g,      (_, a, b) => `${a}0${b}`)
+    .replace(/(\d)O([\/\-. ])/g, (_, a, b) => `${a}0${b}`)
+    .replace(/([\/\-. ])O(\d)/g, (_, a, b) => `${a}0${b}`)
+    .replace(/\bO(\d)/g,        (_, a) => `0${a}`)
+    .replace(/(\d)I(\d)/g,      (_, a, b) => `${a}1${b}`)
+    .replace(/([\/\-. ])I(\d)/g, (_, a, b) => `${a}1${b}`)
+    .replace(/\bI(\d)/g,        (_, a) => `1${a}`);
+}
+
+function isValidOcrDate(dateStr) {
+  if (!dateStr) return false;
+  const parts = dateStr.split('/');
+  if (parts.length !== 3) return false;
+  const year = Number(parts[2]);
+  return year >= THIS_YEAR - 1 && year <= THIS_YEAR + 15;
+}
+
+function _parseOcrDateRaw(text) {
   if (!text) return null;
   const up = text.toUpperCase().replace(/\s+/g, ' ').trim();
 
   // Strip common prefixes
   const prefixed = up.match(
-    /(?:BEST\s+BY|USE\s+BY|EXPIRES?D?|BEST\s+BEFORE|EXP)\s*:?\s*(.+)/
+    /(?:BEST\s+(?:BY|BEFORE(?:\s+END)?)|USE\s+BY|SELL\s+BY|EXPIRES?(?:S|D)?|EXP\.?|BB[DE]?|MHD)\s*:?\s*(.+)/
   );
   const t = prefixed ? prefixed[1] : up;
 
-  // Month name + day + year: JUN 26 2026
+  // DD MMM YYYY: 26 JUN 2026, 26-JUN-2026, 26.JUN.2026
+  const dmyNamed = t.match(
+    /(\d{1,2})[\s.\-]+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[\s.\-]+(\d{2,4})/
+  );
+  if (dmyNamed) {
+    const y = dmyNamed[3].length === 2 ? `20${dmyNamed[3]}` : dmyNamed[3];
+    return `${MONTH_MAP[dmyNamed[2]]}/${dmyNamed[1].padStart(2, '0')}/${y}`;
+  }
+
+  // MMM DD YYYY: JUN 26 2026
   const mdy = t.match(
     /(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[.,\s]+(\d{1,2})[.,\s]+(\d{2,4})/
   );
@@ -49,47 +81,104 @@ function parseOcrDate(text) {
     return `${MONTH_MAP[mdy[1]]}/${mdy[2].padStart(2, '0')}/${y}`;
   }
 
-  // Month name + year: JUN 2026 or JUN/26
+  // MMM YYYY or MMM/YY: JUN 2026, JUN/26, JUN-26
   const my = t.match(
-    /(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[\/\s]+(\d{2,4})/
+    /(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[\/\s.\-]+(\d{2,4})/
   );
   if (my) {
     const y = my[2].length === 2 ? `20${my[2]}` : my[2];
     return `${MONTH_MAP[my[1]]}/01/${y}`;
   }
 
-  // ISO: YYYY-MM-DD
+  // ISO: YYYY-MM-DD or YYYY/MM/DD
   const iso = t.match(/(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
   if (iso) {
     return `${iso[2].padStart(2, '0')}/${iso[3].padStart(2, '0')}/${iso[1]}`;
   }
 
-  // MM/DD/YYYY or MM-DD-YYYY
+  // Dot-separated: DD.MM.YYYY or DD.MM.YY (European style)
+  const dotFull = t.match(/(\d{1,2})\.(\d{1,2})\.(\d{2,4})/);
+  if (dotFull) {
+    const y = dotFull[3].length === 2 ? `20${dotFull[3]}` : dotFull[3];
+    const first = parseInt(dotFull[1], 10);
+    if (first > 12) {
+      return `${dotFull[2].padStart(2, '0')}/${dotFull[1].padStart(2, '0')}/${y}`;
+    }
+    return `${dotFull[1].padStart(2, '0')}/${dotFull[2].padStart(2, '0')}/${y}`;
+  }
+
+  // MM/DD/YYYY or MM-DD-YYYY (flips to DD/MM when first part > 12)
   const full = t.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (full) {
     const y = full[3].length === 2 ? `20${full[3]}` : full[3];
+    const first = parseInt(full[1], 10);
+    if (first > 12) {
+      return `${full[2].padStart(2, '0')}/${full[1].padStart(2, '0')}/${y}`;
+    }
     return `${full[1].padStart(2, '0')}/${full[2].padStart(2, '0')}/${y}`;
   }
 
-  // MM/YYYY or MM/YY
-  const myShort = t.match(/(\d{1,2})\/(\d{4}|\d{2})(?!\d)/);
+  // MM/YYYY, MM-YYYY, MM YYYY, MM.YYYY (and 2-digit year variants)
+  const myShort = t.match(/\b(\d{1,2})[\/\-\s.](\d{4}|\d{2})(?!\d)/);
   if (myShort) {
-    const y = myShort[2].length === 2 ? `20${myShort[2]}` : myShort[2];
-    return `${myShort[1].padStart(2, '0')}/01/${y}`;
+    const m = parseInt(myShort[1], 10);
+    if (m >= 1 && m <= 12) {
+      const y = myShort[2].length === 2 ? `20${myShort[2]}` : myShort[2];
+      return `${myShort[1].padStart(2, '0')}/01/${y}`;
+    }
   }
 
   return null;
 }
 
-async function runOcr(base64, apiKey) {
+function parseOcrDate(text) {
+  const result = _parseOcrDateRaw(text);
+  return result && isValidOcrDate(result) ? result : null;
+}
+
+// Try each OCR text pass in order, returning the first valid date found.
+function extractDate(rawText) {
+  if (!rawText) return null;
+
+  // Pass 1: line by line on raw text
+  for (const line of rawText.split('\n')) {
+    const d = parseOcrDate(line);
+    if (d) return d;
+  }
+
+  // Pass 2: all lines joined (catches dates split across line breaks)
+  const collapsed = rawText.replace(/\n/g, ' ');
+  const d2 = parseOcrDate(collapsed);
+  if (d2) return d2;
+
+  // Pass 3: same collapsed text with O/I artifact correction
+  return parseOcrDate(fixOcrArtifacts(collapsed));
+}
+
+// Calls the OCR API. Uses Engine 2 by default (more accurate on printed labels).
+// Races against a hard timeout so the spinner never hangs forever.
+async function runOcr(base64, apiKey, signal, useEngine1 = false) {
   const form = new FormData();
   form.append('base64Image', `data:image/jpg;base64,${base64}`);
   form.append('apikey', apiKey);
   form.append('language', 'eng');
   form.append('isOverlayRequired', 'false');
-  const res = await fetch('https://api.ocr.space/parse/image', { method: 'POST', body: form });
-  const json = await res.json();
-  return json?.ParsedResults?.[0]?.ParsedText ?? '';
+  form.append('scale', 'true');
+  form.append('OCREngine', useEngine1 ? '1' : '2');
+
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('OCR_TIMEOUT')), OCR_TIMEOUT_MS)
+  );
+
+  const fetchPromise = fetch('https://api.ocr.space/parse/image', {
+    method: 'POST',
+    body: form,
+    signal,
+  })
+    .then(r => r.json())
+    .then(j => j?.ParsedResults?.[0]?.ParsedText ?? '');
+
+  return Promise.race([fetchPromise, timeoutPromise]);
 }
 
 export default function Scan() {
@@ -97,6 +186,7 @@ export default function Scan() {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
   const scanLock = useRef(false);
+  const abortRef = useRef(null);
 
   const [mode, setMode] = useState('barcode');
   const [torchOn, setTorchOn] = useState(false);
@@ -104,6 +194,7 @@ export default function Scan() {
   const [ocrLoading, setOcrLoading] = useState(false);
   const [foundDate, setFoundDate] = useState(null);
   const [success, setSuccess] = useState(false);
+  const [pendingBarcode, setPendingBarcode] = useState(null);
 
   const scanLineY = useRef(new Animated.Value(0)).current;
   const animRef = useRef(null);
@@ -136,14 +227,19 @@ export default function Scan() {
   }, [mode, success, startScanLine, stopScanLine]);
 
   const reset = useCallback(() => {
+    // Cancel any in-flight OCR request so it can't update state after we've moved on
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
     scanLock.current = false;
     setScanResult(null);
     setFoundDate(null);
     setSuccess(false);
     setOcrLoading(false);
+    setPendingBarcode(null);
   }, []);
 
-  // Reset when screen gains focus (e.g. returning from addToPantry)
   useFocusEffect(
     useCallback(() => {
       reset();
@@ -156,10 +252,16 @@ export default function Scan() {
     setSuccess(true);
     setScanResult({ type, data });
     Vibration.vibrate(100);
-    setTimeout(() => {
-      router.push({ pathname: '/(tabs)/addToPantry', params: { barcode: data } });
-    }, 2000);
-  }, [router]);
+  }, []);
+
+  const handleScanExpiry = useCallback(() => {
+    const barcode = scanResult?.data;
+    scanLock.current = false;
+    setScanResult(null);
+    setSuccess(false);
+    setPendingBarcode(barcode);
+    setMode('expiry');
+  }, [scanResult]);
 
   const handleCapture = async () => {
     if (!cameraRef.current || ocrLoading) return;
@@ -168,26 +270,51 @@ export default function Scan() {
       alert('OCR key missing. Add EXPO_PUBLIC_OCR_KEY to your .env file.');
       return;
     }
+
+    // Cancel any previous request before starting a new one
+    if (abortRef.current) abortRef.current.abort();
+    const abort = new AbortController();
+    abortRef.current = abort;
+
     setOcrLoading(true);
     try {
-      const pic = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.6 });
-      const text = await runOcr(pic.base64, apiKey);
-      let date = null;
-      for (const line of text.split('\n')) {
-        date = parseOcrDate(line);
-        if (date) break;
+      const pic = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.9 });
+      if (abort.signal.aborted) return;
+
+      // First attempt: Engine 2 is more accurate on printed product labels
+      let text = await runOcr(pic.base64, apiKey, abort.signal, false);
+      let date = extractDate(text);
+
+      // Auto-retry with Engine 1 if Engine 2 found nothing — different model, different results
+      if (!date && !abort.signal.aborted) {
+        text = await runOcr(pic.base64, apiKey, abort.signal, true);
+        date = extractDate(text);
       }
+
+      if (abort.signal.aborted) return;
+
       if (date) {
         Vibration.vibrate(100);
         setFoundDate(date);
         setSuccess(true);
       } else {
-        alert('No expiry date found. Try better lighting or move closer.');
+        alert(
+          'No expiry date found.\n\n' +
+          '• Point directly at the "Best By", "Exp" or "Use By" date\n' +
+          '• Keep the date centred and hold the phone steady\n' +
+          '• Use the flashlight button if the label is in shadow'
+        );
       }
     } catch (e) {
-      alert('Scan error: ' + e.message);
+      if (abort.signal.aborted) return;
+      if (e.message === 'OCR_TIMEOUT') {
+        alert('Scan timed out. Check your internet connection and try again.');
+      } else {
+        alert('Scan error: ' + e.message);
+      }
     } finally {
-      setOcrLoading(false);
+      if (!abort.signal.aborted) setOcrLoading(false);
+      if (abortRef.current === abort) abortRef.current = null;
     }
   };
 
@@ -295,10 +422,18 @@ export default function Scan() {
           <Ionicons name="barcode-outline" size={28} color={palette.orange} />
           <Text style={styles.resultLabel}>{scanResult.type.toUpperCase()}</Text>
           <Text style={styles.resultValue} numberOfLines={2}>{scanResult.data}</Text>
-          <Text style={styles.resultHint}>Navigating to Add Item…</Text>
-          <TouchableOpacity style={[styles.actionBtn, styles.orangeBtn]} onPress={reset}>
-            <Text style={styles.actionBtnText}>Scan Another</Text>
-          </TouchableOpacity>
+          <Text style={styles.resultHint}>Add now or scan the expiry date first</Text>
+          <View style={styles.rowBtns}>
+            <TouchableOpacity style={[styles.actionBtn, styles.ghostBtn]} onPress={handleScanExpiry}>
+              <Text style={styles.ghostBtnText}>Scan Expiry</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.orangeBtn]}
+              onPress={() => router.push({ pathname: '/(tabs)/addToPantry', params: { barcode: scanResult.data } })}
+            >
+              <Text style={styles.actionBtnText}>Add Item</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -316,15 +451,27 @@ export default function Scan() {
           <Ionicons name="calendar-outline" size={28} color={palette.sun} />
           <Text style={styles.resultLabel}>Expiry Date Found</Text>
           <Text style={styles.resultValue}>{foundDate}</Text>
+          {pendingBarcode && (
+            <Text style={styles.resultHint}>Will be added with your scanned item</Text>
+          )}
           <View style={styles.rowBtns}>
             <TouchableOpacity style={[styles.actionBtn, styles.ghostBtn]} onPress={reset}>
               <Text style={styles.ghostBtnText}>Retry</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionBtn, styles.orangeBtn]}
-              onPress={() =>
-                router.push({ pathname: '/(tabs)/addToPantry', params: { expirationDate: foundDate } })
-              }
+              onPress={() => {
+                // Convert MM/DD/YYYY → YYYY-MM-DD so slashes don't break URL routing
+                const [mm, dd, yyyy] = foundDate.split('/');
+                const isoDate = `${yyyy}-${mm}-${dd}`;
+                router.push({
+                  pathname: '/(tabs)/addToPantry',
+                  params: {
+                    expirationDate: isoDate,
+                    ...(pendingBarcode ? { barcode: pendingBarcode } : {}),
+                  },
+                });
+              }}
             >
               <Text style={styles.actionBtnText}>Use This Date</Text>
             </TouchableOpacity>
@@ -335,6 +482,11 @@ export default function Scan() {
       {/* Shutter button — expiry mode idle */}
       {mode === 'expiry' && !foundDate && !ocrLoading && (
         <View style={styles.shutterWrap}>
+          <Text style={styles.pendingHint}>
+            {pendingBarcode
+              ? 'Barcode scanned — now scan the expiry date'
+              : 'Point at the Best By, Exp or Use By date'}
+          </Text>
           <TouchableOpacity style={styles.shutterBtn} onPress={handleCapture} activeOpacity={0.7}>
             <View style={styles.shutterInner} />
           </TouchableOpacity>
@@ -529,6 +681,17 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: 'center',
+    gap: 12,
+  },
+  pendingHint: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    overflow: 'hidden',
   },
   shutterBtn: {
     width: 72,
