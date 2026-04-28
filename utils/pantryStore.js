@@ -27,6 +27,7 @@ function normalizePantryItem(raw) {
     category: String(raw.category || 'Produce'),
     quantity,
     expirationDate,
+    ...(raw.imageUrl ? { imageUrl: String(raw.imageUrl) } : {}),
   };
 }
 

@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { View, Text, SectionList, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, Image, SectionList, TouchableOpacity, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 
@@ -61,26 +61,34 @@ export default function PantryFilter({ groupedItems }) {
           style={styles.card}
           onPress={() => router.push(`/details?id=${item.id}`)}
         >
-          <View style={styles.row}>
-            <Text style={styles.name}>{item.name}</Text>
-
-            {isLowStock(item) && (
-              <Text style={styles.lowStock}>Low Stock!</Text>
-            )}
+          <View style={styles.cardInner}>
+            {item.imageUrl ? (
+              <Image
+                source={{ uri: item.imageUrl }}
+                style={styles.itemImage}
+                resizeMode="contain"
+              />
+            ) : null}
+            <View style={styles.cardContent}>
+              <View style={styles.row}>
+                <Text style={styles.name}>{item.name}</Text>
+                {isLowStock(item) && (
+                  <Text style={styles.lowStock}>Low Stock!</Text>
+                )}
+              </View>
+              <Text style={styles.category}>{item.category}</Text>
+              <Text style={styles.qtyLine}>Quantity on hand: {qtyLabel}</Text>
+              {!hasExpiry ? (
+                <Text style={styles.dateMuted}>No expiry date saved</Text>
+              ) : expired ? (
+                <Text style={styles.expired}>Expired {Math.abs(days)} days ago</Text>
+              ) : expiringSoon ? (
+                <Text style={styles.soon}>Expires in {days} days</Text>
+              ) : (
+                <Text style={styles.date}>Expires: {formatExpirationDate(item.expirationDate)}</Text>
+              )}
+            </View>
           </View>
-
-          <Text style={styles.category}>{item.category}</Text>
-          <Text style={styles.qtyLine}>Quantity on hand: {qtyLabel}</Text>
-
-          {!hasExpiry ? (
-            <Text style={styles.dateMuted}>No expiry date saved</Text>
-          ) : expired ? (
-            <Text style={styles.expired}>Expired {Math.abs(days)} days ago</Text>
-          ) : expiringSoon ? (
-            <Text style={styles.soon}>Expires in {days} days</Text>
-          ) : (
-            <Text style={styles.date}>Expires: {formatExpirationDate(item.expirationDate)}</Text>
-          )}
         </TouchableOpacity>
       </Swipeable>
     );
@@ -198,6 +206,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.border,
     ...shadows.card,
+  },
+  cardInner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  itemImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: '#f5f5f5',
+    flexShrink: 0,
+  },
+  cardContent: {
+    flex: 1,
   },
   row: {
     flexDirection: 'row',
