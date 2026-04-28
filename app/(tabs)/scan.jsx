@@ -8,11 +8,13 @@ import {
   ActivityIndicator,
   Animated,
   Dimensions,
+  Alert,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter, useFocusEffect } from 'expo-router';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { palette } from '../../utils/theme';
+import { lookupProductByBarcode } from '../../utils/barcodeLookup';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const FRAME_SIZE = Math.min(Math.round(SCREEN_W * 0.72), 290);
@@ -32,6 +34,21 @@ const MONTH_MAP = {
   JUL: '07', AUG: '08', SEP: '09', OCT: '10', NOV: '11', DEC: '12',
 };
 
+const MONTH_WORDS = {
+  JANUARY: 'JAN',
+  FEBRUARY: 'FEB',
+  MARCH: 'MAR',
+  APRIL: 'APR',
+  JUNE: 'JUN',
+  JULY: 'JUL',
+  AUGUST: 'AUG',
+  SEPTEMBER: 'SEP',
+  SEPT: 'SEP',
+  OCTOBER: 'OCT',
+  NOVEMBER: 'NOV',
+  DECEMBER: 'DEC',
+};
+
 // Correct common OCR misreads in numeric contexts: O→0 and I→1.
 // Patterns are constrained so month names (OCT, JAN, etc.) are not affected.
 function fixOcrArtifacts(text) {
@@ -45,23 +62,139 @@ function fixOcrArtifacts(text) {
     .replace(/\bI(\d)/g,        (_, a) => `1${a}`);
 }
 
+function normalizeOcrYear(value) {
+  const raw = String(value || '').trim();
+  if (raw.length === 2) return `20${raw}`;
+  return raw;
+}
+
+function formatNumericOcrDate(firstPart, secondPart, yearPart) {
+  const first = Number(firstPart);
+  const second = Number(secondPart);
+  const year = Number(normalizeOcrYear(yearPart));
+
+  if (!Number.isFinite(first) || !Number.isFinite(second) || !Number.isFinite(year)) {
+    return null;
+  }
+
+  let month = first;
+  let day = second;
+
+  // Some labels use DD-MM-YYYY. If the first number cannot be a month, flip it.
+  if (first > 12 && second <= 12) {
+    month = second;
+    day = first;
+  }
+
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+
+  const date = new Date(year, month - 1, day);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+
+  return `${String(month).padStart(2, '0')}/${String(day).padStart(2, '0')}/${year}`;
+}
+
+function normalizeMonthWords(text) {
+  let out = String(text || '').toUpperCase();
+  for (const [word, shortName] of Object.entries(MONTH_WORDS)) {
+    out = out.replace(new RegExp(`\\b${word}\\b`, 'g'), shortName);
+  }
+  return out;
+}
+
 function isValidOcrDate(dateStr) {
   if (!dateStr) return false;
   const parts = dateStr.split('/');
   if (parts.length !== 3) return false;
+  const month = Number(parts[0]);
+  const day = Number(parts[1]);
   const year = Number(parts[2]);
-  return year >= THIS_YEAR - 1 && year <= THIS_YEAR + 15;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(year, month - 1, day);
+  const realDate =
+    date.getFullYear() === year &&
+    date.getMonth() === month - 1 &&
+    date.getDate() === day;
+  return realDate && year >= THIS_YEAR - 1 && year <= THIS_YEAR + 15;
 }
 
 function _parseOcrDateRaw(text) {
   if (!text) return null;
-  const up = text.toUpperCase().replace(/\s+/g, ' ').trim();
+  const up = normalizeMonthWords(text).replace(/\s+/g, ' ').trim();
 
   // Strip common prefixes
   const prefixed = up.match(
-    /(?:BEST\s+(?:BY|BEFORE(?:\s+END)?)|USE\s+BY|SELL\s+BY|EXPIRES?(?:S|D)?|EXP\.?|BB[DE]?|MHD)\s*:?\s*(.+)/
+    /(?:BEST\s+(?:IF\s+)?(?:USED\s+)?BY|BEST\s+BEFORE(?:\s+END)?|USE\s+BY|USED\s+BY|SELL\s+BY|EXPIRES?(?:S|D)?|EXP\.?|BB[DE]?|MHD)\s*:?\s*(.+)/
   );
   const t = prefixed ? prefixed[1] : up;
+
+  // Dot-matrix bakery labels can OCR as "11:18:23 AM 2026".
+  // Use the first two numbers plus the final year as MM/DD/YYYY.
+  const timeLikeWithYear = t.match(
+    /\b(\d{1,2})\s*[:\-\/]\s*(\d{1,2})\s*[:\-\/]\s*\d{1,2}\s*(?:AM|PM)?\s*(20\d{2}|19\d{2})\b/
+  );
+  if (timeLikeWithYear) {
+    const formatted = formatNumericOcrDate(
+      timeLikeWithYear[1],
+      timeLikeWithYear[2],
+      timeLikeWithYear[3]
+    );
+    if (formatted) return formatted;
+  }
+
+  // Handles noisy OCR with an extra lot/time number before the year:
+  // "11 18 23 AM 2026" -> 11/18/2026.
+  const numericWithExtraCodeAndYear = t.match(
+    /\b(\d{1,2})[\s.\-\/:]+(\d{1,2})[\s.\-\/:]+(?:\d{1,2}\s*(?:AM|PM)?\s*)?(20\d{2}|19\d{2})\b/
+  );
+  if (numericWithExtraCodeAndYear) {
+    const formatted = formatNumericOcrDate(
+      numericWithExtraCodeAndYear[1],
+      numericWithExtraCodeAndYear[2],
+      numericWithExtraCodeAndYear[3]
+    );
+    if (formatted) return formatted;
+  }
+
+  // Handles labels that OCR as plain spaced numbers: "11 18 2026".
+  const spacedNumericDate = t.match(/\b(\d{1,2})\s+(\d{1,2})\s+(20\d{2}|19\d{2}|\d{2})\b/);
+  if (spacedNumericDate) {
+    const formatted = formatNumericOcrDate(
+      spacedNumericDate[1],
+      spacedNumericDate[2],
+      spacedNumericDate[3]
+    );
+    if (formatted) return formatted;
+  }
+
+  // Handles compact numeric dates near expiry words: "11182026" or "111826".
+  const compactNumeric = t.match(/\b(\d{2})(\d{2})(20\d{2}|19\d{2}|\d{2})\b/);
+  if (compactNumeric) {
+    const formatted = formatNumericOcrDate(
+      compactNumeric[1],
+      compactNumeric[2],
+      compactNumeric[3]
+    );
+    if (formatted) return formatted;
+  }
+
+  // Compact printed format: 02SEP2026 or 02SEP26
+  const compactDmyNamed = t.match(
+    /\b(\d{1,2})(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)(\d{2,4})\b/
+  );
+  if (compactDmyNamed) {
+    const y =
+      compactDmyNamed[3].length === 2
+        ? `20${compactDmyNamed[3]}`
+        : compactDmyNamed[3];
+    return `${MONTH_MAP[compactDmyNamed[2]]}/${compactDmyNamed[1].padStart(2, '0')}/${y}`;
+  }
 
   // DD MMM YYYY: 26 JUN 2026, 26-JUN-2026, 26.JUN.2026
   const dmyNamed = t.match(
@@ -110,12 +243,7 @@ function _parseOcrDateRaw(text) {
   // MM/DD/YYYY or MM-DD-YYYY (flips to DD/MM when first part > 12)
   const full = t.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
   if (full) {
-    const y = full[3].length === 2 ? `20${full[3]}` : full[3];
-    const first = parseInt(full[1], 10);
-    if (first > 12) {
-      return `${full[2].padStart(2, '0')}/${full[1].padStart(2, '0')}/${y}`;
-    }
-    return `${full[1].padStart(2, '0')}/${full[2].padStart(2, '0')}/${y}`;
+    return formatNumericOcrDate(full[1], full[2], full[3]);
   }
 
   // MM/YYYY, MM-YYYY, MM YYYY, MM.YYYY (and 2-digit year variants)
@@ -195,6 +323,10 @@ export default function Scan() {
   const [foundDate, setFoundDate] = useState(null);
   const [success, setSuccess] = useState(false);
   const [pendingBarcode, setPendingBarcode] = useState(null);
+  const [pendingProduct, setPendingProduct] = useState(null);
+  const [scannedProduct, setScannedProduct] = useState(null);
+  const [productLookupLoading, setProductLookupLoading] = useState(false);
+  const [productLookupError, setProductLookupError] = useState('');
 
   const scanLineY = useRef(new Animated.Value(0)).current;
   const animRef = useRef(null);
@@ -238,6 +370,10 @@ export default function Scan() {
     setSuccess(false);
     setOcrLoading(false);
     setPendingBarcode(null);
+    setPendingProduct(null);
+    setScannedProduct(null);
+    setProductLookupLoading(false);
+    setProductLookupError('');
   }, []);
 
   useFocusEffect(
@@ -246,12 +382,28 @@ export default function Scan() {
     }, [reset])
   );
 
-  const handleBarcodeScan = useCallback(({ type, data }) => {
+  const handleBarcodeScan = useCallback(async ({ type, data }) => {
     if (scanLock.current) return;
     scanLock.current = true;
     setSuccess(true);
     setScanResult({ type, data });
+    setScannedProduct(null);
+    setProductLookupError('');
     Vibration.vibrate(100);
+
+    setProductLookupLoading(true);
+    try {
+      const product = await lookupProductByBarcode(data);
+      if (product) {
+        setScannedProduct(product);
+      } else {
+        setProductLookupError('Product name not found. You can still add it manually.');
+      }
+    } catch {
+      setProductLookupError('Product lookup failed. You can still add it manually.');
+    } finally {
+      setProductLookupLoading(false);
+    }
   }, []);
 
   const handleScanExpiry = useCallback(() => {
@@ -260,8 +412,43 @@ export default function Scan() {
     setScanResult(null);
     setSuccess(false);
     setPendingBarcode(barcode);
+    setPendingProduct(scannedProduct);
     setMode('expiry');
-  }, [scanResult]);
+  }, [scanResult, scannedProduct]);
+
+  const addItemParams = useCallback(
+    (extra = {}) => ({
+      barcode: scanResult?.data || pendingBarcode || '',
+      quantity: '1',
+      ...(scannedProduct?.name ? { name: scannedProduct.name } : {}),
+      ...(scannedProduct?.category ? { category: scannedProduct.category } : {}),
+      ...(pendingProduct?.name ? { name: pendingProduct.name } : {}),
+      ...(pendingProduct?.category ? { category: pendingProduct.category } : {}),
+      ...extra,
+    }),
+    [pendingBarcode, pendingProduct, scanResult, scannedProduct]
+  );
+
+  const openManualExpiryAddItem = useCallback(() => {
+    router.push({
+      pathname: '/(tabs)/addToPantry',
+      params: addItemParams({ manualExpiry: '1' }),
+    });
+  }, [addItemParams, router]);
+
+  const showExpiryFallbackPrompt = useCallback(
+    (message) => {
+      Alert.alert(
+        'Expiry date not detected',
+        `${message}\n\nYou can still add the scanned item now and type the expiry date manually.`,
+        [
+          { text: 'Retry Scan', style: 'cancel' },
+          { text: 'Add Manually', onPress: openManualExpiryAddItem },
+        ]
+      );
+    },
+    [openManualExpiryAddItem]
+  );
 
   const handleCapture = async () => {
     if (!cameraRef.current || ocrLoading) return;
@@ -298,19 +485,16 @@ export default function Scan() {
         setFoundDate(date);
         setSuccess(true);
       } else {
-        alert(
-          'No expiry date found.\n\n' +
-          '• Point directly at the "Best By", "Exp" or "Use By" date\n' +
-          '• Keep the date centred and hold the phone steady\n' +
-          '• Use the flashlight button if the label is in shadow'
+        showExpiryFallbackPrompt(
+          'Try pointing directly at the "Best By", "Exp", or "Use By" date with the label centered and steady.'
         );
       }
     } catch (e) {
       if (abort.signal.aborted) return;
       if (e.message === 'OCR_TIMEOUT') {
-        alert('Scan timed out. Check your internet connection and try again.');
+        showExpiryFallbackPrompt('The expiry scan timed out. Check your internet connection and try again if you want.');
       } else {
-        alert('Scan error: ' + e.message);
+        showExpiryFallbackPrompt(`Scan error: ${e.message}`);
       }
     } finally {
       if (!abort.signal.aborted) setOcrLoading(false);
@@ -321,6 +505,11 @@ export default function Scan() {
   const switchMode = (m) => { reset(); setMode(m); };
 
   const bracketColor = success ? '#3E9954' : mode === 'barcode' ? palette.orange : palette.sun;
+  const guideTitle = mode === 'barcode' ? 'Step 1: Scan barcode' : 'Step 2: Scan expiry date';
+  const guideText =
+    mode === 'barcode'
+      ? 'Point at the product barcode. After it finds the item, add it or scan the expiry date.'
+      : 'Center the Best By, Exp, or Use By date. If it cannot read it, you can add the date manually.';
 
   if (!permission) {
     return <View style={{ flex: 1, backgroundColor: '#000' }} />;
@@ -416,12 +605,32 @@ export default function Scan() {
         />
       </TouchableOpacity>
 
+      {!scanResult && !foundDate && !ocrLoading && (
+        <View style={styles.guideCard}>
+          <Text style={styles.guideTitle}>{guideTitle}</Text>
+          <Text style={styles.guideText}>{guideText}</Text>
+        </View>
+      )}
+
       {/* Barcode result card */}
       {scanResult && !foundDate && (
         <View style={styles.resultCard}>
           <Ionicons name="barcode-outline" size={28} color={palette.orange} />
           <Text style={styles.resultLabel}>{scanResult.type.toUpperCase()}</Text>
           <Text style={styles.resultValue} numberOfLines={2}>{scanResult.data}</Text>
+          {productLookupLoading ? (
+            <Text style={styles.resultHint}>Looking up product name...</Text>
+          ) : scannedProduct ? (
+            <>
+              <Text style={styles.productName} numberOfLines={2}>{scannedProduct.name}</Text>
+              <Text style={styles.resultHint}>
+                {scannedProduct.brand ? `${scannedProduct.brand} - ` : ''}
+                {scannedProduct.category}
+              </Text>
+            </>
+          ) : productLookupError ? (
+            <Text style={styles.resultHint}>{productLookupError}</Text>
+          ) : null}
           <Text style={styles.resultHint}>Add now or scan the expiry date first</Text>
           <View style={styles.rowBtns}>
             <TouchableOpacity style={[styles.actionBtn, styles.ghostBtn]} onPress={handleScanExpiry}>
@@ -429,7 +638,7 @@ export default function Scan() {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionBtn, styles.orangeBtn]}
-              onPress={() => router.push({ pathname: '/(tabs)/addToPantry', params: { barcode: scanResult.data } })}
+              onPress={() => router.push({ pathname: '/(tabs)/addToPantry', params: addItemParams() })}
             >
               <Text style={styles.actionBtnText}>Add Item</Text>
             </TouchableOpacity>
@@ -466,10 +675,7 @@ export default function Scan() {
                 const isoDate = `${yyyy}-${mm}-${dd}`;
                 router.push({
                   pathname: '/(tabs)/addToPantry',
-                  params: {
-                    expirationDate: isoDate,
-                    ...(pendingBarcode ? { barcode: pendingBarcode } : {}),
-                  },
+                  params: addItemParams({ expirationDate: isoDate }),
                 });
               }}
             >
@@ -609,6 +815,30 @@ const styles = StyleSheet.create({
     borderColor: '#FFD700',
   },
 
+  guideCard: {
+    position: 'absolute',
+    top: 108,
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+  },
+  guideTitle: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  guideText: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+  },
+
   // Result card
   resultCard: {
     position: 'absolute',
@@ -638,6 +868,12 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: palette.text,
+    textAlign: 'center',
+  },
+  productName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: palette.greenDeep,
     textAlign: 'center',
   },
   resultHint: {

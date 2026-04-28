@@ -11,13 +11,22 @@ import { palette, shadows } from '../../utils/theme';
 
 export default function AddPantryItem() {
   const router = useRouter();
-  const { barcode, name: initialName, quantity: initialQuantity, fromGroceryId, expirationDate: initialExpDate } =
-    useLocalSearchParams();
+  const {
+    barcode,
+    name: initialName,
+    category: initialCategory,
+    quantity: initialQuantity,
+    fromGroceryId,
+    expirationDate: initialExpDate,
+    manualExpiry,
+  } = useLocalSearchParams();
 
   const [name, setName] = useState('');
   const [category, setCategory] = useState('Produce');
   const [quantity, setQuantity] = useState('');
   const [expirationDate, setExpirationDate] = useState('');
+  const shouldPromptManualExpiry =
+    typeof manualExpiry === 'string' && manualExpiry === '1';
 
   useEffect(() => {
     if (barcode) {
@@ -41,10 +50,14 @@ export default function AddPantryItem() {
       }
     }
 
+    if (typeof initialCategory === 'string' && initialCategory.trim()) {
+      setCategory(initialCategory);
+    }
+
     if (typeof initialQuantity === 'string' && initialQuantity.trim()) {
       setQuantity(initialQuantity);
     }
-  }, [initialName, initialQuantity]);
+  }, [initialCategory, initialName, initialQuantity]);
 
   const updateName = value => {
     setName(value);
@@ -82,6 +95,7 @@ export default function AddPantryItem() {
       category,
       quantity: parsedQuantity,
       expirationDate: formatExpirationDate(parsedDate),
+      ...(typeof barcode === 'string' && barcode.trim() ? { barcode: barcode.trim() } : {}),
     };
 
     const savedItem = addPantryItem(pantryItem);
@@ -91,7 +105,11 @@ export default function AddPantryItem() {
       deleteGroceryItem(fromGroceryId);
     }
 
-    router.back();
+    Alert.alert(
+      'Item added',
+      `${trimmedName} was added to your pantry.`,
+      [{ text: 'OK', onPress: () => router.back() }]
+    );
   };
 
   return (
@@ -135,6 +153,11 @@ export default function AddPantryItem() {
           style={styles.input}
           placeholderTextColor={palette.muted}
         />
+        {shouldPromptManualExpiry && !expirationDate ? (
+          <Text style={styles.manualExpiryHint}>
+            Expiry scan did not find a date. Please type the expiry date manually.
+          </Text>
+        ) : null}
       </View>
 
       <TouchableOpacity onPress={handleAdd} style={styles.saveButton}>
@@ -186,6 +209,12 @@ const styles = StyleSheet.create({
     marginTop: 10,
     backgroundColor: '#fff',
     color: palette.text,
+  },
+  manualExpiryHint: {
+    marginTop: 8,
+    color: palette.peachDeep,
+    fontSize: 13,
+    lineHeight: 18,
   },
   saveButton: {
     marginTop: 18,

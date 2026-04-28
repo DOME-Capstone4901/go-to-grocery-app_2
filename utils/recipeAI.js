@@ -1,43 +1,90 @@
 import { getPantryItems } from './pantryStore';
 import { getRecipeApiBase } from './apiBase';
+import { getDaysUntilExpiration } from './expiration';
+
+function recipeItemName(value) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value).trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(recipeItemName).filter(Boolean).join(' ');
+  }
+  if (typeof value === 'object') {
+    const candidate =
+      value.name ||
+      value.item ||
+      value.ingredient ||
+      value.productName ||
+      value.title ||
+      value.label ||
+      value.value;
+    return recipeItemName(candidate);
+  }
+  return '';
+}
+
+function recipeItemList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map(recipeItemName).filter(Boolean);
+}
 
 function mapBackendRecipes(recipes) {
   return recipes.map(recipe => {
-    const missingFromList = Array.isArray(recipe.ingredientsNeed)
-      ? recipe.ingredientsNeed.filter(Boolean)
-      : [];
-    const missingFromSingle =
-      typeof recipe.missingItem === 'string' && recipe.missingItem.trim()
-        ? [recipe.missingItem.trim()]
-        : [];
+    const missingFromList = recipeItemList(recipe.ingredientsNeed);
+    const missingFromSingle = recipeItemList([recipe.missingItem]);
 
     const missing = missingFromList.length ? missingFromList : missingFromSingle;
 
     return {
-      name: recipe.title || 'Recipe',
+      name: recipeItemName(recipe.title) || 'Recipe',
       missing,
       canCookNow: missing.length === 0,
-      whyMatches: recipe.whyMatches || '',
+      whyMatches: recipeItemName(recipe.whyMatches) || '',
       ingredientsNeed: missing,
-      ingredientsHave: Array.isArray(recipe.ingredientsHave) ? recipe.ingredientsHave : [],
+      ingredientsHave: recipeItemList(recipe.ingredientsHave),
       estimatedCost:
         typeof recipe.estimatedCost === 'number' ? recipe.estimatedCost : null,
       timeMinutes:
         typeof recipe.timeMinutes === 'number' ? recipe.timeMinutes : null,
       servings: typeof recipe.servings === 'number' ? recipe.servings : null,
-      url: recipe.url || '',
+      steps: recipeItemList(recipe.steps),
+      substitution: recipeItemName(recipe.substitution),
+      missingItem: recipeItemName(recipe.missingItem) || null,
+      cuisine: recipeItemName(recipe.cuisine),
+      difficulty: recipeItemName(recipe.difficulty),
+      url: recipeItemName(recipe.url),
     };
   });
 }
 
-export async function getRecipeSuggestions(pantryItems = getPantryItems()) {
+function mapPantryItemForAI(item) {
+  const expirationDate = String(item?.expirationDate || '').trim();
+  const daysUntilExpiration = expirationDate
+    ? getDaysUntilExpiration(expirationDate)
+    : null;
+
+  return {
+    name: String(item?.name || '').trim(),
+    category: String(item?.category || '').trim(),
+    quantity: item?.quantity ?? null,
+    expirationDate,
+    daysUntilExpiration:
+      Number.isFinite(daysUntilExpiration) ? daysUntilExpiration : null,
+  };
+}
+
+export async function getRecipeSuggestionResult(pantryItems = getPantryItems()) {
   const items = Array.isArray(pantryItems) ? pantryItems : [];
   const ingredientNames = items
     .map(item => String(item?.name || '').trim())
     .filter(Boolean);
+  const pantryDetails = items
+    .map(mapPantryItemForAI)
+    .filter(item => item.name);
 
   if (!ingredientNames.length) {
-    return [];
+    return { recipes: [], source: 'empty', note: '' };
   }
 
   const apiBase = getRecipeApiBase();
@@ -48,6 +95,7 @@ export async function getRecipeSuggestions(pantryItems = getPantryItems()) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ingredients: ingredientNames,
+        pantryItems: pantryDetails,
         restrictions: [],
         budget: 20,
         budgetType: 'per_meal',
@@ -65,12 +113,21 @@ export async function getRecipeSuggestions(pantryItems = getPantryItems()) {
     const backendRecipes = Array.isArray(data?.recipes) ? data.recipes : [];
 
     if (backendRecipes.length) {
-      return mapBackendRecipes(backendRecipes);
+      return {
+        recipes: mapBackendRecipes(backendRecipes),
+        source: data?.source || 'ai',
+        note: data?.note || '',
+      };
     }
   } catch (e) {
     console.warn('getRecipeSuggestions:', e?.message || e);
     throw e;
   }
 
-  return [];
+  return { recipes: [], source: 'empty', note: '' };
+}
+
+export async function getRecipeSuggestions(pantryItems = getPantryItems()) {
+  const result = await getRecipeSuggestionResult(pantryItems);
+  return result.recipes;
 }

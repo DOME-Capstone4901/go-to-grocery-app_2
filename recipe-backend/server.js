@@ -142,6 +142,26 @@ function normalizeBudget(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function normalizePantryDetails(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      name: String(item?.name || "").trim(),
+      category: String(item?.category || "").trim(),
+      quantity:
+        Number.isFinite(Number(item?.quantity)) && Number(item.quantity) > 0
+          ? Number(item.quantity)
+          : null,
+      expirationDate: String(item?.expirationDate || "").trim(),
+      daysUntilExpiration:
+        Number.isFinite(Number(item?.daysUntilExpiration))
+          ? Number(item.daysUntilExpiration)
+          : null,
+    }))
+    .filter((item) => item.name)
+    .slice(0, 30);
+}
+
 function extractJsonObject(text) {
   if (!text || typeof text !== "string") return null;
 
@@ -157,55 +177,261 @@ function extractJsonObject(text) {
   }
 }
 
+function recipeItemName(value) {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value).trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(recipeItemName).filter(Boolean).join(" ");
+  }
+  if (typeof value === "object") {
+    return recipeItemName(
+      value.name ||
+        value.item ||
+        value.ingredient ||
+        value.productName ||
+        value.title ||
+        value.label ||
+        value.value
+    );
+  }
+  return "";
+}
+
+function recipeItemList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map(recipeItemName).filter(Boolean);
+}
+
 function normalizeRecipe(recipe = {}) {
   return {
-    title: String(recipe.title || "Recipe"),
-    url: String(recipe.url || ""),
-    whyMatches: String(recipe.whyMatches || ""),
-    missingItem: recipe.missingItem ?? null,
-    substitution: recipe.substitution ?? null,
+    title: recipeItemName(recipe.title) || "Recipe",
+    url: recipeItemName(recipe.url),
+    whyMatches: recipeItemName(recipe.whyMatches),
+    missingItem: recipeItemName(recipe.missingItem) || null,
+    substitution: recipeItemName(recipe.substitution) || null,
     estimatedCost:
       Number.isFinite(Number(recipe.estimatedCost)) ? Number(recipe.estimatedCost) : 0,
     servings: Number.isFinite(Number(recipe.servings)) ? Number(recipe.servings) : 0,
     timeMinutes:
       Number.isFinite(Number(recipe.timeMinutes)) ? Number(recipe.timeMinutes) : 0,
-    ingredientsHave: Array.isArray(recipe.ingredientsHave)
-      ? recipe.ingredientsHave.map(String)
-      : [],
-    ingredientsNeed: Array.isArray(recipe.ingredientsNeed)
-      ? recipe.ingredientsNeed.map(String)
-      : [],
-    steps: Array.isArray(recipe.steps) ? recipe.steps.map(String) : [],
+    cuisine: recipeItemName(recipe.cuisine),
+    difficulty: recipeItemName(recipe.difficulty),
+    ingredientsHave: recipeItemList(recipe.ingredientsHave),
+    ingredientsNeed: recipeItemList(recipe.ingredientsNeed),
+    steps: recipeItemList(recipe.steps).slice(0, 6),
   };
 }
 
 function normalizeResponse(payload) {
-  const recipes = Array.isArray(payload?.recipes)
-    ? payload.recipes.map(normalizeRecipe).slice(0, 5)
-    : [];
+  const seen = new Set();
+  const recipes = [];
+  const rawRecipes = Array.isArray(payload?.recipes) ? payload.recipes : [];
+
+  for (const rawRecipe of rawRecipes) {
+    const recipe = normalizeRecipe(rawRecipe);
+    const key = recipe.title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    recipes.push(recipe);
+    if (recipes.length >= 5) break;
+  }
+
   return { recipes };
 }
 
-function buildPrompt({ ingredients, restrictions, budget, budgetType }) {
+function uniqueNames(values) {
+  const seen = new Set();
+  const out = [];
+
+  for (const value of values) {
+    const name = String(value || "").trim();
+    const key = name.toLowerCase();
+    if (!name || seen.has(key)) continue;
+    seen.add(key);
+    out.push(name);
+  }
+
+  return out;
+}
+
+function recipeTitleBase(ingredients) {
+  if (ingredients.length >= 2) {
+    return `${ingredients[0]} and ${ingredients[1]}`;
+  }
+  return ingredients[0] || "Pantry";
+}
+
+function missingItemsForRecipe(ingredients, candidates) {
+  const pantryKeys = new Set(ingredients.map((name) => name.toLowerCase()));
+  return candidates.filter((item) => !pantryKeys.has(item.toLowerCase())).slice(0, 2);
+}
+
+function makeFallbackRecipes(ingredients, pantryDetails) {
+  const pantryNames = uniqueNames([
+    ...pantryDetails.map((item) => item.name),
+    ...ingredients,
+  ]);
+  const expiringNames = pantryDetails
+    .filter(
+      (item) =>
+        Number.isFinite(Number(item.daysUntilExpiration)) &&
+        Number(item.daysUntilExpiration) <= 5
+    )
+    .sort((a, b) => Number(a.daysUntilExpiration) - Number(b.daysUntilExpiration))
+    .map((item) => item.name);
+  const focus = uniqueNames([...expiringNames, ...pantryNames]).slice(0, 4);
+  const titleBase = recipeTitleBase(focus.length ? focus : pantryNames);
+  const have = focus.length ? focus : pantryNames.slice(0, 4);
+
+  const templates = [
+    {
+      title: `Quick ${titleBase} Skillet`,
+      cuisine: "American/Home-style",
+      difficulty: "Easy",
+      timeMinutes: 20,
+      servings: 2,
+      estimatedCost: 4,
+      missingCandidates: ["onion", "cheese"],
+      steps: [
+        "Chop the pantry ingredients into bite-size pieces.",
+        "Warm a pan and cook the firm ingredients first.",
+        "Add the remaining pantry items and stir until hot.",
+        "Season to taste and serve warm.",
+      ],
+    },
+    {
+      title: `Indian-Style ${titleBase} Bowl`,
+      cuisine: "Indian",
+      difficulty: "Easy",
+      timeMinutes: 25,
+      servings: 2,
+      estimatedCost: 5,
+      missingCandidates: ["curry powder", "ginger"],
+      steps: [
+        "Cook or warm the pantry base ingredient.",
+        "Simmer the remaining ingredients with a small splash of water or milk if available.",
+        "Add curry-style seasoning and cook until everything is tender.",
+        "Serve together in a bowl.",
+      ],
+    },
+    {
+      title: `Mediterranean ${titleBase} Plate`,
+      cuisine: "Mediterranean",
+      difficulty: "Easy",
+      timeMinutes: 18,
+      servings: 2,
+      estimatedCost: 5,
+      missingCandidates: ["lemon", "feta cheese"],
+      steps: [
+        "Prepare the pantry ingredients by slicing or warming them.",
+        "Arrange them together as a bowl or plate.",
+        "Add a bright topping if available.",
+        "Serve as a quick lunch or light dinner.",
+      ],
+    },
+    {
+      title: `Mexican Pantry ${titleBase} Bowl`,
+      cuisine: "Mexican",
+      difficulty: "Easy",
+      timeMinutes: 22,
+      servings: 2,
+      estimatedCost: 5,
+      missingCandidates: ["tortilla", "salsa"],
+      steps: [
+        "Warm the pantry ingredients together in a pan.",
+        "Build a bowl or wrap with the cooked ingredients.",
+        "Add salsa or a simple topping if available.",
+        "Serve while warm.",
+      ],
+    },
+    {
+      title: `Italian-Inspired ${titleBase}`,
+      cuisine: "Italian",
+      difficulty: "Easy",
+      timeMinutes: 25,
+      servings: 2,
+      estimatedCost: 6,
+      missingCandidates: ["garlic", "parmesan cheese"],
+      steps: [
+        "Cook the pantry ingredients until warm and tender.",
+        "Add a simple sauce or a little liquid to bring it together.",
+        "Simmer briefly so the flavors combine.",
+        "Finish with cheese or herbs if available.",
+      ],
+    },
+  ];
+
+  return normalizeResponse({
+    recipes: templates.map((template) => {
+      const ingredientsNeed = missingItemsForRecipe(pantryNames, template.missingCandidates);
+      return {
+        title: template.title,
+        url: "",
+        whyMatches: expiringNames.length
+          ? `Uses pantry items, especially ${expiringNames[0]}, before it expires.`
+          : "Uses ingredients already in your pantry for a quick meal idea.",
+        missingItem: ingredientsNeed[0] || null,
+        substitution: ingredientsNeed[0]
+          ? `If you do not have ${ingredientsNeed[0]}, use a similar pantry item.`
+          : null,
+        estimatedCost: template.estimatedCost,
+        servings: template.servings,
+        timeMinutes: template.timeMinutes,
+        cuisine: template.cuisine,
+        difficulty: template.difficulty,
+        ingredientsHave: have,
+        ingredientsNeed,
+        steps: template.steps,
+      };
+    }),
+  });
+}
+
+function buildPrompt({ ingredients, pantryDetails, restrictions, budget, budgetType }) {
   const restrictionText = restrictions.length
     ? restrictions.join(", ")
     : "none";
+  const pantryText = pantryDetails.length
+    ? pantryDetails
+        .map((item) => {
+          const parts = [item.name];
+          if (item.category) parts.push(`category: ${item.category}`);
+          if (item.quantity != null) parts.push(`qty: ${item.quantity}`);
+          if (item.expirationDate) parts.push(`expires: ${item.expirationDate}`);
+          if (item.daysUntilExpiration != null) {
+            parts.push(`days left: ${item.daysUntilExpiration}`);
+          }
+          return `- ${parts.join(", ")}`;
+        })
+        .join("\n")
+    : ingredients.map((name) => `- ${name}`).join("\n");
 
   return `
 You are a recipe assistant.
 
-Suggest up to 5 practical recipes using these ingredients: ${ingredients.join(", ")}.
+Suggest 5 practical pantry-based recipes.
+
+Pantry items:
+${pantryText}
 
 Dietary restrictions: ${restrictionText}
 Budget: ${budget} (${budgetType})
 
 Rules:
-- Prefer real, common recipes.
-- Return a varied mix of cuisines when possible: American/home-style, Mediterranean, Mexican, Italian, Indian, and one Asian-style recipe at most.
-- Do not return mostly Asian-style recipes unless the ingredients strongly require it.
+- Use pantry ingredients as the main source. Prioritize items expiring soon.
+- Return a varied mix, not five versions of the same meal.
+- Include different cuisines when possible: American/home-style, Mediterranean, Mexican, Italian, Indian, and at most one Asian-style recipe.
+- Keep recipes realistic for a college student or busy household.
+- Missing ingredients should be common grocery items, no more than 2 per recipe.
+- Do not list salt, pepper, water, or oil as missing ingredients unless truly essential.
+- "ingredientsHave" must only include pantry items that are actually used in that recipe.
+- "ingredientsNeed" must only include items not already in the pantry.
+- "whyMatches" should explain why this recipe fits the pantry in one short sentence.
 - The "url" field may be empty. Do not invent exact recipe page URLs.
 - If one small ingredient is missing, set "missingItem" and "substitution".
-- Keep steps concise and clear.
+- Keep steps concise and clear, 4 to 6 steps.
 - Return only JSON.
 
 Return this exact shape:
@@ -220,6 +446,8 @@ Return this exact shape:
       "estimatedCost": 0,
       "servings": 0,
       "timeMinutes": 0,
+      "cuisine": "",
+      "difficulty": "",
       "ingredientsHave": [],
       "ingredientsNeed": [],
       "steps": []
@@ -253,6 +481,17 @@ async function callGemini(prompt, modelName) {
   const parsed = extractJsonObject(text);
   if (!parsed) throw new Error("Model returned invalid JSON");
   return normalizeResponse(parsed);
+}
+
+function isGoogleNetworkError(error) {
+  const msg = String(error?.message || error || "").toLowerCase();
+  return (
+    msg.includes("enotfound") ||
+    msg.includes("getaddrinfo") ||
+    msg.includes("econnrefused") ||
+    msg.includes("network") ||
+    msg.includes("failed to fetch")
+  );
 }
 
 app.get("/health", (_req, res) => {
@@ -322,13 +561,8 @@ app.post("/places/grocery-stores", async (req, res) => {
 });
 
 app.post("/recipes/suggest", async (req, res) => {
-  if (!GEMINI_API_KEY) {
-    return res.status(500).json({
-      error: "Server is missing GEMINI_API_KEY",
-    });
-  }
-
   const ingredients = normalizeStringArray(req.body?.ingredients);
+  const pantryDetails = normalizePantryDetails(req.body?.pantryItems);
   const restrictions = normalizeStringArray(req.body?.restrictions);
   const budget = normalizeBudget(req.body?.budget);
   const budgetType =
@@ -346,22 +580,39 @@ app.post("/recipes/suggest", async (req, res) => {
     });
   }
 
-  const prompt = buildPrompt({ ingredients, restrictions, budget, budgetType });
+  if (!GEMINI_API_KEY) {
+    return res.json({
+      ...makeFallbackRecipes(ingredients, pantryDetails),
+      source: "local-fallback",
+      note: "Recipe AI key is not configured, so local pantry suggestions were used.",
+    });
+  }
+
+  const prompt = buildPrompt({
+    ingredients,
+    pantryDetails,
+    restrictions,
+    budget,
+    budgetType,
+  });
 
   try {
     let result;
     try {
       result = await callGemini(prompt, MODEL);
     } catch (primaryError) {
-      if (!FALLBACK_MODEL) {
+      if (!FALLBACK_MODEL || isGoogleNetworkError(primaryError)) {
         throw primaryError;
       }
       result = await callGemini(prompt, FALLBACK_MODEL);
     }
     return res.json(result);
   } catch (err) {
-    return res.status(500).json({
-      error: err?.message || "Failed to suggest recipes",
+    console.warn("Recipe AI unavailable; using local fallback:", err?.message || err);
+    return res.json({
+      ...makeFallbackRecipes(ingredients, pantryDetails),
+      source: "local-fallback",
+      note: "Recipe AI is temporarily unavailable, so local pantry suggestions were used.",
     });
   }
 });

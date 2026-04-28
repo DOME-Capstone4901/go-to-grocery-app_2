@@ -1,28 +1,64 @@
 import React, { useCallback, useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { addToGroceryList, getGroceryList } from '../../utils/groceryStore';
 import { getPantryItems } from '../../utils/pantryStore';
-import { getRecipeSuggestions } from '../../utils/recipeAI';
+import { getRecipeSuggestionResult } from '../../utils/recipeAI';
 import { palette, shadows } from '../../utils/theme';
+
+function displayName(value) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value).trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(displayName).filter(Boolean).join(' ');
+  }
+  if (typeof value === 'object') {
+    return displayName(
+      value.name ||
+        value.item ||
+        value.ingredient ||
+        value.productName ||
+        value.title ||
+        value.label ||
+        value.value
+    );
+  }
+  return '';
+}
+
+function displayList(items) {
+  return Array.isArray(items) ? items.map(displayName).filter(Boolean) : [];
+}
+
+function groceryKey(value) {
+  return displayName(value).toLowerCase().trim();
+}
 
 function recipeSearchUrl(recipe) {
   const terms = [
     recipe?.name,
-    ...(Array.isArray(recipe?.ingredientsHave) ? recipe.ingredientsHave : []),
+    ...displayList(recipe?.ingredientsHave),
     'recipe',
   ]
-    .map(value => String(value || '').trim())
+    .map(displayName)
     .filter(Boolean)
     .join(' ');
 
   return `https://www.google.com/search?q=${encodeURIComponent(terms)}`;
 }
 
+function compactList(items, fallback = 'None') {
+  const cleaned = displayList(items);
+  return cleaned.length ? cleaned.join(', ') : fallback;
+}
+
 export default function RecipesTab() {
   const [recipes, setRecipes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const [recipeNotice, setRecipeNotice] = useState('');
   const groceryNames = new Set(
     getGroceryList()
       .map(item => String(item?.name || '').toLowerCase().trim())
@@ -32,16 +68,24 @@ export default function RecipesTab() {
   const refreshRecipes = useCallback(async (isActive = () => true) => {
     setLoading(true);
     setErrorMsg('');
+    setRecipeNotice('');
     const pantryItems = getPantryItems();
     try {
-      const nextRecipes = await getRecipeSuggestions(pantryItems);
+      const result = await getRecipeSuggestionResult(pantryItems);
       if (isActive()) {
-        setRecipes(nextRecipes);
+        setRecipes(result.recipes);
+        if (result.note) {
+          setRecipeNotice(result.note);
+        } else if (result.source === 'local-fallback') {
+          setRecipeNotice('Recipe AI is temporarily unavailable, so backup pantry suggestions are shown.');
+        }
       }
     } catch (e) {
       if (isActive()) {
         setRecipes([]);
-        setErrorMsg(e?.message || 'Recipe AI is unavailable right now.');
+        setErrorMsg(
+          'Recipe Hub could not connect right now. Make sure the recipe backend is running, then refresh.'
+        );
       }
     } finally {
       if (isActive()) {
@@ -73,6 +117,13 @@ export default function RecipesTab() {
         <Text style={styles.refreshButtonText}>Refresh Recipes</Text>
       </Pressable>
 
+      {!!recipeNotice && !loading && !errorMsg && (
+        <View style={styles.noticeCard}>
+          <Text style={styles.noticeTitle}>Demo-safe backup is on</Text>
+          <Text style={styles.noticeText}>{recipeNotice}</Text>
+        </View>
+      )}
+
       {loading ? (
         <View style={styles.emptyCard}>
           <Text style={styles.emptyText}>Loading recipe ideas...</Text>
@@ -89,11 +140,12 @@ export default function RecipesTab() {
         </View>
       ) : (
         recipes.map((recipe, index) => {
-          const pendingItems = recipe.missing.filter(item =>
-            groceryNames.has(String(item).toLowerCase().trim())
+          const missingItems = displayList(recipe.missing);
+          const pendingItems = missingItems.filter(item =>
+            groceryNames.has(groceryKey(item))
           );
-          const stillMissingItems = recipe.missing.filter(
-            item => !groceryNames.has(String(item).toLowerCase().trim())
+          const stillMissingItems = missingItems.filter(
+            item => !groceryNames.has(groceryKey(item))
           );
           const waitingOnPurchase =
             !recipe.canCookNow &&
@@ -106,10 +158,18 @@ export default function RecipesTab() {
               {!!recipe.whyMatches && (
                 <Text style={styles.recipeMeta}>{recipe.whyMatches}</Text>
               )}
+              {!!(recipe.cuisine || recipe.difficulty) && (
+                <Text style={styles.recipeMeta}>
+                  {[recipe.cuisine, recipe.difficulty].filter(Boolean).join(' - ')}
+                </Text>
+              )}
               <Text style={styles.recipeMeta}>
-                {recipe.timeMinutes ? `${recipe.timeMinutes} min` : 'Time n/a'} ·{' '}
+                {recipe.timeMinutes ? `${recipe.timeMinutes} min` : 'Time n/a'} -{' '}
                 {recipe.estimatedCost != null ? `$${recipe.estimatedCost.toFixed(2)}` : 'Cost n/a'}
-                {recipe.servings ? ` · ${recipe.servings} servings` : ''}
+                {recipe.servings ? ` - ${recipe.servings} servings` : ''}
+              </Text>
+              <Text style={styles.sectionText}>
+                Uses: {compactList(recipe.ingredientsHave)}
               </Text>
               {recipe.canCookNow ? (
                 <Text style={styles.readyText}>You can cook this now</Text>
@@ -123,11 +183,30 @@ export default function RecipesTab() {
                 </Text>
               )}
 
+              {!!recipe.substitution && (
+                <Text style={styles.sectionText}>Substitute: {recipe.substitution}</Text>
+              )}
+
+              {recipe.steps?.length > 0 && (
+                <View style={styles.stepsBox}>
+                  <Text style={styles.stepsTitle}>Quick steps</Text>
+                  {recipe.steps.slice(0, 4).map((step, stepIndex) => (
+                    <Text key={`${recipe.name}-step-${stepIndex}`} style={styles.stepText}>
+                      {stepIndex + 1}. {step}
+                    </Text>
+                  ))}
+                </View>
+              )}
+
               {!recipe.canCookNow && stillMissingItems.length > 0 && (
                 <Pressable
                   style={styles.addButton}
                   onPress={() => {
                     stillMissingItems.forEach(item => addToGroceryList({ name: item }));
+                    Alert.alert(
+                      'Added to grocery list',
+                      `${stillMissingItems.join(', ')} added. Buy it, then add it to your pantry.`
+                    );
                     refreshRecipes();
                   }}
                 >
@@ -209,6 +288,25 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
   },
+  noticeCard: {
+    backgroundColor: palette.surfaceAlt,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.border,
+    padding: 13,
+    marginBottom: 14,
+  },
+  noticeTitle: {
+    color: palette.greenDeep,
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  noticeText: {
+    marginTop: 4,
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
   recipeCard: {
     backgroundColor: palette.surface,
     borderRadius: 12,
@@ -228,6 +326,30 @@ const styles = StyleSheet.create({
     color: palette.muted,
     fontSize: 13,
     lineHeight: 18,
+  },
+  sectionText: {
+    marginTop: 8,
+    color: palette.text,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  stepsBox: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+    paddingTop: 10,
+  },
+  stepsTitle: {
+    color: palette.greenDeep,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  stepText: {
+    color: palette.text,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 2,
   },
   readyText: {
     marginTop: 6,
