@@ -210,8 +210,8 @@ export default function Login() {
             <View style={styles.logoBadge}>
               <Text style={styles.logoIcon}>GG</Text>
             </View>
-            <Text style={styles.appTitle}>Got To Grocery</Text>
-            <Text style={styles.appSubtitle}>Fresh groceries, organized pantry, less waste.</Text>
+            <Text style={styles.appTitle}>Go To Grocery</Text>
+            <Text style={styles.appSubtitle}>Organize pantry, Less waste.</Text>
           </View>
 
           <View style={styles.panel}>

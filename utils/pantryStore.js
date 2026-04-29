@@ -43,7 +43,26 @@ async function save() {
     console.log('Error saving pantry:', e);
   }
 }
+export async function useItem(id, amountUsed = 1) {
+  const items = getPantryItems();
+  const item = items.find(i => i.id === id);
+  if (!item) return;
 
+  const newQty = Math.max(0, (item.quantity ?? 1) - amountUsed);
+
+  if (newQty === 0) {
+    // Either delete or mark as empty — your choice
+    await deletePantryItem(id);
+  } else {
+    await updatePantryItem(id, { ...item, quantity: newQty });
+  }
+
+  // Auto-add to grocery list if now low stock
+  const updated = { ...item, quantity: newQty };
+  if (isLowStock(updated)) {
+    addToGroceryList({ name: item.name, unit: item.unit });
+  }
+}
 /**
  * Loads pantry from disk and merges legacy `PANTRY_ITEMS_V1` into canonical `PANTRY` shape.
  * Call this on app start and whenever the Pantry tab gains focus so the list stays in sync.

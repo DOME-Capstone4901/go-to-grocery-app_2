@@ -32,7 +32,12 @@ export default function PantryFilter({ groupedItems }) {
       (groupedItems?.nodate?.length || 0),
     [groupedItems]
   );
-
+<TouchableOpacity
+  onPress={() => useItem(item.id)}
+  style={styles.useButton}
+>
+  <Text style={styles.useButtonText}>− Use</Text>
+</TouchableOpacity>
   const hasItems = sections.length > 0;
 
   const renderRightActions = (id) => (

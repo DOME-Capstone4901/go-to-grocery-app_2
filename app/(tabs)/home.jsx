@@ -1,231 +1,477 @@
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  FlatList,
-  Pressable,
+  ActivityIndicator,
+  Alert,
   ScrollView,
-} from 'react-native'
-import { router } from 'expo-router'
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { deletePantryItem, getPantryItems } from '../../utils/pantryStore';
+import { getDaysUntilExpiration } from '../../utils/expiration';
+import { isLowStock } from '../../utils/lowStock';
+import { getPantrySuggestions } from '../../utils/suggestions';
+import { getRecipeSuggestions } from '../../utils/recipeAI';
+import { addToGroceryList, getGroceryList } from '../../utils/groceryStore';
+import { scheduleExpirationAlerts } from '../../utils/notifications';
+import { palette, shadows } from '../../utils/theme';
+import { supabase } from '../../src/lib/supabase';
 
-const GROCERY_ITEMS = [
-  { id: '1', name: 'Milk', category: 'Dairy' },
-  { id: '2', name: 'Eggs', category: 'Dairy' },
-  { id: '3', name: 'Bread', category: 'Bakery' },
-  { id: '4', name: 'Rice', category: 'Grains' },
-  { id: '5', name: 'Chicken Breast', category: 'Meat' },
-  { id: '6', name: 'Apples', category: 'Produce' },
-  { id: '7', name: 'Bananas', category: 'Produce' },
-  { id: '8', name: 'Tomatoes', category: 'Produce' },
-  { id: '9', name: 'Onions', category: 'Produce' },
-  { id: '10', name: 'Pasta', category: 'Pantry' },
-  { id: '11', name: 'Olive Oil', category: 'Pantry' },
-  { id: '12', name: 'Yogurt', category: 'Dairy' },
-  { id: '13', name: 'Cheddar Cheese', category: 'Dairy' },
-  { id: '14', name: 'Spinach', category: 'Produce' },
-  { id: '15', name: 'Salmon', category: 'Meat' },
-]
+export default function HomeScreen() {
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [pantryCount, setPantryCount] = useState(0);
+  const [lowStockCount, setLowStockCount] = useState(0);
+  const [expiringSoonCount, setExpiringSoonCount] = useState(0);
+  const [suggestions, setSuggestions] = useState([]);
+  const [recipes, setRecipes] = useState([]);
 
-function uniq(arr) {
-  return Array.from(new Set(arr))
-}
+  const groceryNames = new Set(
+    getGroceryList()
+      .map(item => String(item?.name || '').toLowerCase().trim())
+      .filter(Boolean)
+  );
 
-export default function Home() {
-  const [query, setQuery] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('All')
-  const [cart, setCart] = useState([])
-  const [recent, setRecent] = useState([])
-  const [sortAZ, setSortAZ] = useState(true)
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    let active = true;
 
-  const categories = useMemo(() => {
-    return ['All', ...uniq(GROCERY_ITEMS.map((i) => i.category)).sort()]
-  }, [])
+    const syncSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!active) return;
+      if (!session) {
+        setIsAuthenticated(false);
+        setSessionChecked(true);
+        router.replace('/login');
+        return;
+      }
+      setIsAuthenticated(true);
+      setSessionChecked(true);
+    };
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    let list = GROCERY_ITEMS
-    if (selectedCategory !== 'All') {
-      list = list.filter((i) => i.category === selectedCategory)
+    syncSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+      const authenticated = Boolean(session);
+      setIsAuthenticated(authenticated);
+      setSessionChecked(true);
+      if (!authenticated) router.replace('/login');
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // ── Data ──────────────────────────────────────────────────────────────────
+  const refreshHome = useCallback(async (isActive = () => true) => {
+    const items = getPantryItems();
+    setPantryCount(items.length);
+    setLowStockCount(items.filter(item => isLowStock(item)).length);
+    setExpiringSoonCount(
+      items.filter(item => {
+        const days = getDaysUntilExpiration(item.expirationDate);
+        return Number.isFinite(days) && days >= 0 && days <= 3;
+      }).length
+    );
+    setSuggestions(getPantrySuggestions(items));
+
+    try {
+      const recipeSuggestions = await getRecipeSuggestions(items);
+      if (isActive()) setRecipes(recipeSuggestions);
+    } catch {
+      if (isActive()) setRecipes([]);
     }
-    if (q) {
-      list = list.filter((i) => `${i.name} ${i.category}`.toLowerCase().includes(q))
+
+    scheduleExpirationAlerts();
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAuthenticated) return undefined;
+      let active = true;
+      refreshHome(() => active);
+      return () => { active = false; };
+    }, [isAuthenticated, refreshHome])
+  );
+
+  // ── Logout ────────────────────────────────────────────────────────────────
+  const handleLogout = async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) { Alert.alert('Logout failed', error.message); return; }
+      router.replace('/login');
+    } finally {
+      setLoggingOut(false);
     }
-    list = [...list].sort((a, b) => {
-      const cmp = a.name.localeCompare(b.name)
-      return sortAZ ? cmp : -cmp
-    })
-    return list
-  }, [query, selectedCategory, sortAZ])
+  };
 
-  const suggestions = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return []
-    const starts = GROCERY_ITEMS.filter((i) => i.name.toLowerCase().startsWith(q))
-    const contains = GROCERY_ITEMS.filter(
-      (i) => !i.name.toLowerCase().startsWith(q) && i.name.toLowerCase().includes(q)
-    )
-    return [...starts, ...contains].slice(0, 5)
-  }, [query])
-
-  const cartCount = cart.length
-  const toggleCart = (itemId) => {
-    setCart((prev) => (prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]))
+  // ── Gates ─────────────────────────────────────────────────────────────────
+  if (!sessionChecked) {
+    return (
+      <View style={styles.authGate}>
+        <ActivityIndicator size="large" color={palette.orange} />
+      </View>
+    );
   }
-  const pushRecent = (text) => {
-    const t = text.trim()
-    if (!t) return
-    setRecent((prev) => [t, ...prev.filter((x) => x !== t)].slice(0, 6))
-  }
+  if (!isAuthenticated) return null;
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.title}>Grocery Search</Text>
-          <Text style={styles.subtitle}>Find items fast • add to list</Text>
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* Header */}
+      <View style={styles.header}>
+        <View style={styles.headerText}>
+          <Text style={styles.title}>Welcome Back 👋</Text>
+          <Text style={styles.subtitle}>
+            Here's what's happening in your pantry.
+          </Text>
         </View>
-        <Pressable style={styles.cartPill} onPress={() => router.push({ pathname: '/details', params: { cartCount } })}>
-          <Text style={styles.cartText}>List: {cartCount}</Text>
-        </Pressable>
-        <Pressable style={styles.settingsBtn} onPress={() => router.push('/login')}>
-          <Text style={styles.settingsBtnText}>⚙️</Text>
-        </Pressable>
+        <TouchableOpacity
+          style={[styles.logoutButton, loggingOut && styles.logoutButtonDisabled]}
+          onPress={handleLogout}
+          disabled={loggingOut}
+        >
+          {loggingOut
+            ? <ActivityIndicator size="small" color={palette.surface} />
+            : <Text style={styles.logoutButtonText}>Log Out</Text>}
+        </TouchableOpacity>
       </View>
 
-      <TextInput
-        value={query}
-        onChangeText={setQuery}
-        placeholder="Search items (milk, apple, pasta...)"
-        placeholderTextColor="#888"
-        style={styles.input}
-        autoCapitalize="none"
-        autoCorrect={false}
-        onSubmitEditing={() => pushRecent(query)}
-        returnKeyType="search"
-      />
+      {/* Stats row */}
+      <View style={styles.statsRow}>
+        <View style={[styles.statCard, { backgroundColor: '#E8F5E9' }]}>
+          <Text style={styles.statNumber}>{pantryCount}</Text>
+          <Text style={styles.statLabel}>Total{'\n'}Items</Text>
+        </View>
+        <View style={[styles.statCard, { backgroundColor: '#FFF3E0' }]}>
+          <Text style={[styles.statNumber, lowStockCount > 0 && styles.alertNumber]}>
+            {lowStockCount}
+          </Text>
+          <Text style={styles.statLabel}>Low{'\n'}Stock</Text>
+        </View>
+        <View style={[styles.statCard, { backgroundColor: '#FCE4EC' }]}>
+          <Text style={[styles.statNumber, expiringSoonCount > 0 && styles.alertNumber]}>
+            {expiringSoonCount}
+          </Text>
+          <Text style={styles.statLabel}>Expiring{'\n'}Soon</Text>
+        </View>
+      </View>
 
+      {/* Quick navigation tiles */}
+      <View style={styles.tilesRow}>
+        <TouchableOpacity
+          style={[styles.tile, { backgroundColor: palette.greenDeep }]}
+          onPress={() => router.push('/(tabs)/MainPantryTab')}
+        >
+          <Text style={styles.tileIcon}>🥫</Text>
+          <Text style={styles.tileLabel}>My Pantry</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tile, { backgroundColor: palette.orange }]}
+          onPress={() => router.push('/(tabs)/groceryList')}
+        >
+          <Text style={styles.tileIcon}>🛒</Text>
+          <Text style={styles.tileLabel}>Grocery List</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tile, { backgroundColor: palette.sun }]}
+          onPress={() => router.push('/(tabs)/addToPantry')}
+        >
+          <Text style={styles.tileIcon}>➕</Text>
+          <Text style={styles.tileLabel}>Add Item</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tile, { backgroundColor: palette.peachDeep }]}
+          onPress={() => router.push('/(tabs)/recipes')}
+        >
+          <Text style={styles.tileIcon}>🍽️</Text>
+          <Text style={styles.tileLabel}>Recipes</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Smart Suggestions */}
       {suggestions.length > 0 && (
-        <View style={styles.suggestBox}>
-          {suggestions.map((s) => (
-            <Pressable key={s.id} style={styles.suggestRow} onPress={() => { setQuery(s.name); pushRecent(s.name) }}>
-              <Text style={styles.suggestText}>{s.name}</Text>
-              <Text style={styles.suggestMuted}>{s.category}</Text>
-            </Pressable>
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Smart Suggestions</Text>
+          {suggestions.map((suggestion, index) => (
+            <View key={index} style={[styles.card, shadows.card]}>
+              <Text style={styles.cardText}>{suggestion.message}</Text>
+              {suggestion.type === 'lowStock' && (
+                <TouchableOpacity
+                  style={styles.cardButton}
+                  onPress={() => addToGroceryList(suggestion.item)}
+                >
+                  <Text style={styles.cardButtonText}>Add to Grocery List</Text>
+                </TouchableOpacity>
+              )}
+              {suggestion.type === 'expiringSoon' && (
+                <TouchableOpacity
+                  style={styles.cardButton}
+                  onPress={() => scheduleExpirationAlerts()}
+                >
+                  <Text style={styles.cardButtonText}>Remind Me</Text>
+                </TouchableOpacity>
+              )}
+              {suggestion.type === 'expired' && (
+                <TouchableOpacity
+                  style={[styles.cardButton, { backgroundColor: palette.danger }]}
+                  onPress={() => {
+                    deletePantryItem(suggestion.item.id);
+                    refreshHome();
+                  }}
+                >
+                  <Text style={styles.cardButtonText}>Remove Item</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           ))}
         </View>
       )}
 
-      {recent.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Recent</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-            {recent.map((r) => (
-              <Pressable key={r} style={styles.chip} onPress={() => setQuery(r)}>
-                <Text style={styles.chipText}>{r}</Text>
-              </Pressable>
-            ))}
-            <Pressable style={[styles.chip, styles.chipDark]} onPress={() => setRecent([])}>
-              <Text style={[styles.chipText, styles.chipTextDark]}>Clear</Text>
-            </Pressable>
-          </ScrollView>
-        </View>
-      )}
-
+      {/* Recipe Ideas */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Category</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-          {categories.map((c) => {
-            const active = c === selectedCategory
-            return (
-              <Pressable key={c} style={[styles.chip, active && styles.chipActive]} onPress={() => setSelectedCategory(c)}>
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
-              </Pressable>
-            )
-          })}
-        </ScrollView>
-      </View>
-
-      <View style={styles.controlsRow}>
-        <Text style={styles.metaText}>Showing {filtered.length} / {GROCERY_ITEMS.length}</Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Pressable style={styles.smallBtn} onPress={() => setSortAZ((v) => !v)}>
-            <Text style={styles.smallBtnText}>{sortAZ ? 'A–Z' : 'Z–A'}</Text>
-          </Pressable>
-          <Pressable style={styles.smallBtn} onPress={() => { setQuery(''); setSelectedCategory('All') }}>
-            <Text style={styles.smallBtnText}>Reset</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <FlatList
-        data={filtered}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        keyboardShouldPersistTaps="handled"
-        renderItem={({ item }) => {
-          const inCart = cart.includes(item.id)
-          return (
-            <Pressable
-              style={styles.row}
-              onPress={() => router.push({ pathname: '/details', params: { name: item.name, category: item.category, inCart: inCart ? 'yes' : 'no' } })}
+        <Text style={styles.sectionTitle}>Recipe Ideas</Text>
+        {recipes.length === 0 ? (
+          <View style={[styles.card, shadows.card]}>
+            <Text style={styles.mutedText}>
+              Add more pantry items to unlock recipe suggestions.
+            </Text>
+            <TouchableOpacity
+              style={styles.cardButton}
+              onPress={() => router.push('/(tabs)/recipes')}
             >
-              <View>
-                <Text style={styles.itemName}>{item.name}</Text>
-                <Text style={styles.itemCategory}>{item.category}</Text>
-              </View>
-              <Pressable style={[styles.addBtn, inCart && styles.addBtnActive]} onPress={() => toggleCart(item.id)}>
-                <Text style={[styles.addBtnText, inCart && styles.addBtnTextActive]}>{inCart ? 'Added' : 'Add'}</Text>
-              </Pressable>
-            </Pressable>
-          )
-        }}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>No matches. Try another search.</Text>
+              <Text style={styles.cardButtonText}>Open Recipes</Text>
+            </TouchableOpacity>
           </View>
-        }
-      />
-    </View>
-  )
+        ) : (
+          recipes.map((recipe, index) => {
+            const stillMissingItems = recipe.missing.filter(
+              item => !groceryNames.has(String(item).toLowerCase().trim())
+            );
+            const pendingItems = recipe.missing.filter(
+              item => groceryNames.has(String(item).toLowerCase().trim())
+            );
+            const waitingOnPurchase =
+              !recipe.canCookNow &&
+              stillMissingItems.length === 0 &&
+              pendingItems.length > 0;
+
+            return (
+              <View key={index} style={[styles.card, styles.recipeCard, shadows.card]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.recipeName}>{recipe.name}</Text>
+                  {recipe.canCookNow ? (
+                    <Text style={styles.readyText}>✅ You can cook this now</Text>
+                  ) : waitingOnPurchase ? (
+                    <Text style={styles.pendingText}>
+                      🛒 Added to list — buy and add to pantry.
+                    </Text>
+                  ) : (
+                    <Text style={styles.mutedText}>
+                      Missing: {stillMissingItems.join(', ')}
+                    </Text>
+                  )}
+                </View>
+                {!recipe.canCookNow && stillMissingItems.length > 0 && (
+                  <TouchableOpacity
+                    style={styles.cardButton}
+                    onPress={() => {
+                      stillMissingItems.forEach(item => addToGroceryList({ name: item }));
+                      refreshHome();
+                    }}
+                  >
+                    <Text style={styles.cardButtonText}>Add Missing</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })
+        )}
+      </View>
+
+      {/* Bottom breathing room above tab bar */}
+      <View style={{ height: 16 }} />
+    </ScrollView>
+  );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#f5f5f5' },
-  headerRow: { marginTop: 10, marginBottom: 10, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
-  title: { fontSize: 26, fontWeight: '700' },
-  subtitle: { marginTop: 4, color: '#666' },
-  cartPill: { backgroundColor: '#111', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
-  cartText: { color: '#fff', fontWeight: '700' },
-  settingsBtn: { padding: 8 },
-  settingsBtnText: { fontSize: 22 },
-  input: { backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 },
-  suggestBox: { backgroundColor: '#fff', borderRadius: 12, marginTop: 8, overflow: 'hidden' },
-  suggestRow: { paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between' },
-  suggestText: { fontWeight: '700' },
-  suggestMuted: { color: '#666' },
-  section: { marginTop: 12 },
-  sectionTitle: { fontWeight: '700', marginBottom: 8 },
-  chipRow: { gap: 8, paddingBottom: 4 },
-  chip: { backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
-  chipText: { fontWeight: '600' },
-  chipActive: { backgroundColor: '#111' },
-  chipTextActive: { color: '#fff' },
-  chipDark: { backgroundColor: '#111' },
-  chipTextDark: { color: '#fff' },
-  controlsRow: { marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  metaText: { color: '#666' },
-  smallBtn: { backgroundColor: '#111', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
-  smallBtnText: { color: '#fff', fontWeight: '700' },
-  list: { paddingTop: 12, paddingBottom: 24 },
-  row: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  itemName: { fontSize: 16, fontWeight: '700' },
-  itemCategory: { marginTop: 2, color: '#666' },
-  addBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 10, backgroundColor: '#f0f0f0' },
-  addBtnActive: { backgroundColor: '#111' },
-  addBtnText: { fontWeight: '700' },
-  addBtnTextActive: { color: '#fff' },
-  empty: { marginTop: 20, alignItems: 'center' },
-  emptyText: { color: '#666' },
-})
+  root: {
+    flex: 1,
+    backgroundColor: palette.bg,
+  },
+  container: {
+    padding: 16,
+    paddingTop: 20,
+  },
+  authGate: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: palette.bg,
+  },
+
+  // ── Header ────────────────────────────────────────────────────────────────
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+  },
+  headerText: { flex: 1, marginRight: 12 },
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: palette.text,
+    letterSpacing: -0.3,
+  },
+  subtitle: {
+    marginTop: 4,
+    fontSize: 13,
+    color: palette.muted,
+  },
+  logoutButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: palette.greenDeep,
+    borderRadius: 8,
+  },
+  logoutButtonDisabled: { opacity: 0.6 },
+  logoutButtonText: {
+    color: palette.surface,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+
+  // ── Stats ────────────────────────────────────────────────────────────────
+  statsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  statCard: {
+    flex: 1,
+    padding: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  statNumber: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: palette.text,
+  },
+  alertNumber: {
+    color: palette.danger,
+  },
+  statLabel: {
+    fontSize: 11,
+    color: palette.muted,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: 2,
+  },
+
+  // ── Quick nav tiles ───────────────────────────────────────────────────────
+  tilesRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 20,
+  },
+  tile: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileIcon: { fontSize: 22 },
+  tileLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#fff',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+
+  // ── Sections ─────────────────────────────────────────────────────────────
+  section: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: palette.text,
+    marginBottom: 10,
+    letterSpacing: -0.2,
+  },
+
+  // ── Cards ─────────────────────────────────────────────────────────────────
+  card: {
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  recipeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  cardText: {
+    fontSize: 14,
+    color: palette.text,
+    lineHeight: 20,
+  },
+  cardButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    backgroundColor: palette.orange,
+    borderRadius: 8,
+  },
+  cardButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+
+  // ── Recipe card specifics ─────────────────────────────────────────────────
+  recipeName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: palette.text,
+    marginBottom: 3,
+  },
+  readyText: {
+    fontSize: 13,
+    color: palette.success,
+    fontWeight: '600',
+  },
+  pendingText: {
+    fontSize: 13,
+    color: palette.orange,
+    fontWeight: '500',
+  },
+  mutedText: {
+    fontSize: 13,
+    color: palette.muted,
+    marginTop: 2,
+  },
+});
