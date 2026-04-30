@@ -73,6 +73,16 @@ export default function Layout() {
       />
 
       <Tabs.Screen
+        name="storeFinder"
+        options={{
+          title: 'Store Finder',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="navigate-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
         name="profile"
         options={{
           title: 'Profile',

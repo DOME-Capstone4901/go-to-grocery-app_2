@@ -15,6 +15,7 @@ import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { addToGroceryList, getGroceryList } from '../utils/groceryStore';
 import StoreAreaMap from '../components/StoreAreaMap';
 import {
+  FEATURED_AREAS,
   fetchGroceryChainStores,
   mapsUrlForPlace,
   resolveSearchToLocation,
@@ -24,9 +25,46 @@ import {
   filterGroceryByQuery,
   getGrocerySuggestions,
 } from '../utils/groceryCatalog';
+import { DEMO_INVENTORY, formatMoney, priceForBrand } from '../data/storeInventory';
 import { searchUsZipCodes } from '../utils/locationSearch';
 import { getStoreCartCount } from '../utils/storeCartStore';
 import { palette, shadows } from '../utils/theme';
+
+const PRICE_COMPARE_ITEM_IDS = [
+  'whole_milk_1gal',
+  'eggs_large_dozen',
+  'bread_whole_wheat_loaf',
+  'bananas_1lb',
+  'chicken_breast_boneless_1lb',
+];
+
+function buildStorePriceSummary(brand) {
+  const normalizedBrand = String(brand || 'walmart').toLowerCase();
+  const compareItems = PRICE_COMPARE_ITEM_IDS.map(id =>
+    DEMO_INVENTORY.find(item => item.id === id)
+  ).filter(Boolean);
+
+  if (!compareItems.length) {
+    return {
+      basketTotalText: '$0.00',
+      itemPreviewText: 'No demo prices yet',
+    };
+  }
+
+  const basketTotal = compareItems.reduce((sum, item) => {
+    return sum + priceForBrand(item, normalizedBrand);
+  }, 0);
+
+  const itemPreviewText = compareItems
+    .slice(0, 3)
+    .map(item => `${item.name}: ${formatMoney(priceForBrand(item, normalizedBrand))}`)
+    .join(' · ');
+
+  return {
+    basketTotalText: formatMoney(basketTotal),
+    itemPreviewText,
+  };
+}
 
 export default function SearchScreen() {
   const params = useLocalSearchParams();
@@ -125,7 +163,17 @@ export default function SearchScreen() {
   const placeSuggestions = useMemo(() => {
     const raw = placeQuery.trim();
     if (!raw) return [];
-    return searchUsZipCodes(raw).slice(0, 8);
+    const q = raw.toLowerCase();
+    const featured = FEATURED_AREAS.filter(area =>
+      [area.label, ...area.aliases].some(text => text.toLowerCase().includes(q))
+    ).map(area => ({
+      id: area.id,
+      city: area.city,
+      state: area.state,
+      zip: '',
+    }));
+    const zipHits = searchUsZipCodes(raw).slice(0, 8);
+    return [...featured, ...zipHits].slice(0, 8);
   }, [placeQuery]);
 
   const groceryCount = getGroceryList().length;
@@ -153,6 +201,18 @@ export default function SearchScreen() {
         ? `${item.name} quantity was increased in your list.`
         : `${item.name} was added to your grocery list.`
     );
+  };
+
+  const goHome = () => {
+    router.replace('/(tabs)/MainPantryTab');
+  };
+
+  const goBack = () => {
+    if (typeof router.canGoBack === 'function' && router.canGoBack()) {
+      router.back();
+      return;
+    }
+    goHome();
   };
 
   return (
@@ -187,6 +247,15 @@ export default function SearchScreen() {
             </Pressable>
           ) : null}
         </View>
+      </View>
+
+      <View style={styles.navPillRow}>
+        <Pressable style={styles.navPill} onPress={goBack}>
+          <Text style={styles.navPillText}>Back</Text>
+        </Pressable>
+        <Pressable style={styles.navPill} onPress={goHome}>
+          <Text style={styles.navPillText}>Home</Text>
+        </Pressable>
       </View>
 
       <View style={styles.modeRow}>
@@ -361,7 +430,7 @@ export default function SearchScreen() {
                   }}
                 >
                   <Text style={styles.suggestText}>
-                    {row.city}, {row.state} {row.zip}
+                    {row.zip ? `${row.city}, ${row.state} ${row.zip}` : `${row.city}, ${row.state}`}
                   </Text>
                   <Text style={styles.suggestMuted}>Tap to search</Text>
                 </Pressable>
@@ -415,15 +484,28 @@ export default function SearchScreen() {
             renderItem={({ item }) => (
               <View style={styles.row}>
                 <View style={{ flex: 1, paddingRight: 8 }}>
-                  <Text style={styles.brandBadge}>
-                    {String(item.brand || '')
-                      .replace(/^./, s => s.toUpperCase())}
-                  </Text>
-                  <Text style={styles.itemName}>{item.name}</Text>
-                  <Text style={styles.itemCategory}>
-                    {item.address || 'Address on map'}
-                    {item.miles != null ? ` · ~${item.miles} mi` : ''}
-                  </Text>
+                  {(() => {
+                    const priceSummary = buildStorePriceSummary(item.brand);
+                    return (
+                      <>
+                        <Text style={styles.brandBadge}>
+                          {String(item.brand || '')
+                            .replace(/^./, s => s.toUpperCase())}
+                        </Text>
+                        <Text style={styles.itemName}>{item.name}</Text>
+                        <Text style={styles.itemCategory}>
+                          {item.address || 'Address on map'}
+                          {item.miles != null ? ` · ~${item.miles} mi` : ''}
+                        </Text>
+                        <Text style={styles.priceHint}>
+                          Est. basket (5 items): {priceSummary.basketTotalText}
+                        </Text>
+                        <Text style={styles.priceHintMuted} numberOfLines={2}>
+                          {priceSummary.itemPreviewText}
+                        </Text>
+                      </>
+                    );
+                  })()}
                 </View>
                 <View style={styles.storeRowActions}>
                   <Pressable
@@ -455,7 +537,7 @@ export default function SearchScreen() {
                       Linking.openURL(url).catch(() => {});
                     }}
                   >
-                    <Text style={styles.mapBtnText}>Maps</Text>
+                    <Text style={styles.mapBtnText}>Directions</Text>
                   </Pressable>
                 </View>
               </View>
@@ -516,6 +598,25 @@ const styles = StyleSheet.create({
   headerPills: {
     alignItems: 'flex-end',
     gap: 8,
+  },
+  navPillRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+    alignSelf: 'flex-start',
+  },
+  navPill: {
+    backgroundColor: palette.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  navPillText: {
+    color: palette.greenDeep,
+    fontWeight: '700',
+    fontSize: 12,
   },
   modeRow: {
     flexDirection: 'row',
@@ -728,6 +829,17 @@ const styles = StyleSheet.create({
   },
   itemName: { fontSize: 16, fontWeight: '700', color: palette.text },
   itemCategory: { marginTop: 2, color: palette.muted },
+  priceHint: {
+    marginTop: 6,
+    color: palette.greenDeep,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  priceHintMuted: {
+    marginTop: 2,
+    color: palette.muted,
+    fontSize: 12,
+  },
   addBtn: {
     paddingVertical: 8,
     paddingHorizontal: 14,

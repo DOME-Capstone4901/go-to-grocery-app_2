@@ -50,6 +50,47 @@ function distanceMiles(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+function makeDemoStores(lat, lng) {
+  const centerLat = Number(lat);
+  const centerLng = Number(lng);
+  const sampleStores = [
+    {
+      brand: "walmart",
+      name: "Walmart Supercenter",
+      address: "Demo location near selected area",
+      lat: centerLat + 0.012,
+      lng: centerLng - 0.01,
+    },
+    {
+      brand: "kroger",
+      name: "Kroger",
+      address: "Demo location near selected area",
+      lat: centerLat - 0.009,
+      lng: centerLng + 0.014,
+    },
+    {
+      brand: "aldi",
+      name: "ALDI",
+      address: "Demo location near selected area",
+      lat: centerLat + 0.016,
+      lng: centerLng + 0.008,
+    },
+  ];
+
+  return sampleStores
+    .map((store, idx) => ({
+      id: `demo-${store.brand}-${idx}`,
+      placeId: "",
+      brand: store.brand,
+      name: store.name,
+      address: store.address,
+      lat: store.lat,
+      lng: store.lng,
+      miles: Math.round(distanceMiles(centerLat, centerLng, store.lat, store.lng) * 10) / 10,
+    }))
+    .sort((a, b) => (a.miles ?? 0) - (b.miles ?? 0));
+}
+
 async function googleGeocode(address, apiKey) {
   const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
   url.searchParams.set("address", address);
@@ -501,17 +542,11 @@ app.get("/health", (_req, res) => {
     port: PORT,
     geminiConfigured: Boolean(GEMINI_API_KEY),
     googleMapsConfigured: Boolean(GOOGLE_MAPS_API_KEY),
-    storeSearchMode: "google_places",
+    storeSearchMode: GOOGLE_MAPS_API_KEY ? "google_places" : "demo_fallback",
   });
 });
 
 app.post("/places/grocery-stores", async (req, res) => {
-  if (!GOOGLE_MAPS_API_KEY) {
-    return res.status(500).json({
-      error: "Server is missing GOOGLE_MAPS_API_KEY",
-    });
-  }
-
   let lat = req.body?.lat;
   let lng = req.body?.lng;
   const q = String(req.body?.query || "").trim();
@@ -543,6 +578,18 @@ app.post("/places/grocery-stores", async (req, res) => {
 
   const latN = Number(lat);
   const lngN = Number(lng);
+
+  if (!GOOGLE_MAPS_API_KEY) {
+    return res.json({
+      lat: latN,
+      lng: lngN,
+      locationLabel,
+      stores: makeDemoStores(latN, lngN),
+      brands: GROCERY_BRANDS.map((b) => b.id),
+      mode: "demo_fallback",
+      note: "GOOGLE_MAPS_API_KEY is not configured; returning demo store locations.",
+    });
+  }
 
   try {
     const stores = await findGroceryChains(latN, lngN, GOOGLE_MAPS_API_KEY);

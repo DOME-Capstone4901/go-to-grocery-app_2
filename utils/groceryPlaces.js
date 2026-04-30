@@ -1,6 +1,40 @@
 const zipcodes = require('zipcodes');
 import { getRecipeApiBase } from './apiBase';
 
+export const FEATURED_AREAS = [
+  {
+    id: 'area-dfw',
+    label: 'DFW Metroplex, TX',
+    city: 'Dallas-Fort Worth',
+    state: 'TX',
+    lat: 32.7767,
+    lng: -96.797,
+    aliases: ['dfw', 'dallas fort worth', 'dallas-fort worth', 'dfw area', 'dfw metroplex'],
+  },
+  {
+    id: 'area-denton',
+    label: 'Denton, TX',
+    city: 'Denton',
+    state: 'TX',
+    lat: 33.2148,
+    lng: -97.1331,
+    aliases: ['denton', 'denton tx', 'denton area'],
+  },
+];
+
+function normalizeLocationQuery(q) {
+  return String(q || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function resolveFeaturedArea(raw) {
+  const normalized = normalizeLocationQuery(raw);
+  if (!normalized) return null;
+  return FEATURED_AREAS.find(area => area.aliases.includes(normalized)) || null;
+}
+
 /**
  * Resolve US city+state or ZIP to coordinates using the bundled `zipcodes` DB (no Google call).
  * Returns null if the user should be geocoded on the server (e.g. street address or city-only).
@@ -8,6 +42,17 @@ import { getRecipeApiBase } from './apiBase';
 export function resolveSearchToLocation(raw) {
   const q = raw.trim();
   if (!q) return null;
+  const featured = resolveFeaturedArea(q);
+  if (featured) {
+    return {
+      lat: featured.lat,
+      lng: featured.lng,
+      label: featured.label,
+      city: featured.city,
+      state: featured.state,
+      zip: '',
+    };
+  }
 
   const digits = q.replace(/\D/g, '');
   const hasLetters = /[a-zA-Z]/.test(q);
@@ -111,8 +156,12 @@ export async function fetchGroceryChainStores(params = {}) {
 }
 
 export function mapsUrlForPlace({ placeId, name, lat, lng }) {
+  const destinationLabel = encodeURIComponent(name || 'grocery store');
   if (placeId) {
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name || 'place')}&query_place_id=${encodeURIComponent(placeId)}`;
+    return `https://www.google.com/maps/dir/?api=1&destination=${destinationLabel}&destination_place_id=${encodeURIComponent(placeId)}&travelmode=driving`;
   }
-  return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  if (lat != null && lng != null) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${lat},${lng}`)}&travelmode=driving`;
+  }
+  return `https://www.google.com/maps/search/?api=1&query=${destinationLabel}`;
 }
