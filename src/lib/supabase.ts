@@ -2,9 +2,18 @@ import 'react-native-url-polyfill/auto'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createClient, processLock } from '@supabase/supabase-js'
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL
-const supabaseKey = process.env.EXPO_PUBLIC_SUPABASE_KEY
-const hasSupabaseEnv = Boolean(supabaseUrl && supabaseKey)
+const normalizeEnv = (value?: string) => {
+  if (!value) return ''
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+  const lower = trimmed.toLowerCase()
+  if (lower === 'undefined' || lower === 'null') return ''
+  return trimmed
+}
+
+const supabaseUrl = normalizeEnv(process.env.EXPO_PUBLIC_SUPABASE_URL)
+const supabaseKey = normalizeEnv(process.env.EXPO_PUBLIC_SUPABASE_KEY)
+const hasValidSupabaseEnv = supabaseUrl.startsWith('http') && supabaseKey.length > 0
 
 const missingSupabaseConfigError = {
   message:
@@ -28,8 +37,11 @@ const fallbackSupabaseClient = {
   },
 }
 
-export const supabase = hasSupabaseEnv
-  ? createClient(supabaseUrl!, supabaseKey!, {
+const createSupabaseClient = () => {
+  if (!hasValidSupabaseEnv) return fallbackSupabaseClient
+
+  try {
+    return createClient(supabaseUrl, supabaseKey, {
       auth: {
         storage: AsyncStorage,
         autoRefreshToken: true,
@@ -38,4 +50,10 @@ export const supabase = hasSupabaseEnv
         lock: processLock,
       },
     })
-  : fallbackSupabaseClient
+  } catch (error) {
+    console.warn('[supabase] Falling back to no-op client:', error)
+    return fallbackSupabaseClient
+  }
+}
+
+export const supabase = createSupabaseClient()

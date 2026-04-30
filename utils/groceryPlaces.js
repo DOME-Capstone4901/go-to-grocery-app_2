@@ -1,6 +1,8 @@
 const zipcodes = require('zipcodes');
 import { getRecipeApiBase } from './apiBase';
 
+const GROCERY_BRANDS = ['walmart', 'kroger', 'aldi'];
+
 export const FEATURED_AREAS = [
   {
     id: 'area-dfw',
@@ -112,6 +114,45 @@ export function resolveSearchToLocation(raw) {
   return null;
 }
 
+function makeDemoStores(lat, lng) {
+  const centerLat = Number(lat);
+  const centerLng = Number(lng);
+  const sample = [
+    {
+      brand: 'walmart',
+      name: 'Walmart Supercenter',
+      address: 'Demo store near this area',
+      lat: centerLat + 0.012,
+      lng: centerLng - 0.01,
+    },
+    {
+      brand: 'kroger',
+      name: 'Kroger',
+      address: 'Demo store near this area',
+      lat: centerLat - 0.009,
+      lng: centerLng + 0.014,
+    },
+    {
+      brand: 'aldi',
+      name: 'ALDI',
+      address: 'Demo store near this area',
+      lat: centerLat + 0.016,
+      lng: centerLng + 0.008,
+    },
+  ];
+
+  return sample.map((store, idx) => ({
+    id: `demo-${store.brand}-${idx}`,
+    placeId: '',
+    brand: store.brand,
+    name: store.name,
+    address: store.address,
+    lat: store.lat,
+    lng: store.lng,
+    miles: null,
+  }));
+}
+
 /**
  * Loads Walmart, Kroger, and Aldi near a point via the recipe backend (Google Places Nearby Search).
  */
@@ -141,6 +182,17 @@ export async function fetchGroceryChainStores(params = {}) {
       msg.includes('Network request failed') ||
       e?.name === 'TypeError';
     if (isNetwork) {
+      if (hasCoords) {
+        return {
+          lat: Number(lat),
+          lng: Number(lng),
+          locationLabel: q || '',
+          stores: makeDemoStores(lat, lng),
+          brands: GROCERY_BRANDS,
+          mode: 'client_demo_fallback',
+          note: `Could not reach ${apiBase}. Showing demo stores while backend is offline.`,
+        };
+      }
       throw new Error(
         `Cannot reach the store API at ${apiBase}. Start backend in recipe-backend and verify EXPO_PUBLIC_RECIPE_API_URL points to it.`
       );
