@@ -2,13 +2,10 @@ import 'react-native-url-polyfill/auto'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { createClient, processLock } from '@supabase/supabase-js'
 
-<<<<<<< HEAD
-=======
 const DEFAULT_SUPABASE_URL = 'https://vrpjwyvpownqibjpuxxf.supabase.co'
 const DEFAULT_SUPABASE_ANON_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZycGp3eXZwb3ducWlianB1eHhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU3NjM4NzgsImV4cCI6MjA5MTMzOTg3OH0.LXHU5Q9OtZNnKjayE2RFZiunS4TxSnrvfnB0TEkS4-0'
 
->>>>>>> 248cc0d (Make Supabase initialization resilient without local env setup.)
 const normalizeEnv = (value?: string) => {
   if (!value) return ''
   const trimmed = value.trim()
@@ -18,15 +15,10 @@ const normalizeEnv = (value?: string) => {
   return trimmed
 }
 
-<<<<<<< HEAD
-const supabaseUrl = normalizeEnv(process.env.EXPO_PUBLIC_SUPABASE_URL)
-const supabaseKey = normalizeEnv(process.env.EXPO_PUBLIC_SUPABASE_KEY)
-=======
 const supabaseUrl =
   normalizeEnv(process.env.EXPO_PUBLIC_SUPABASE_URL) || DEFAULT_SUPABASE_URL
 const supabaseKey =
   normalizeEnv(process.env.EXPO_PUBLIC_SUPABASE_KEY) || DEFAULT_SUPABASE_ANON_KEY
->>>>>>> 248cc0d (Make Supabase initialization resilient without local env setup.)
 const hasValidSupabaseEnv = supabaseUrl.startsWith('http') && supabaseKey.length > 0
 
 const missingSupabaseConfigError = {
