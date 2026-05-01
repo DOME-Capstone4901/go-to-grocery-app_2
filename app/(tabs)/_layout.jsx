@@ -23,9 +23,9 @@ export default function Layout() {
       }}
     >
       <Tabs.Screen
-        name="MainPantryTab"
+        name="home"
         options={{
-          title: 'Pantry',
+          title: 'Home',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="home-outline" size={size} color={color} />
           ),
@@ -33,9 +33,19 @@ export default function Layout() {
       />
 
       <Tabs.Screen
+        name="MainPantryTab"
+        options={{
+          title: 'Pantry',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="nutrition-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
         name="groceryList"
         options={{
-          title: 'Grocery List',
+          title: 'Grocery',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="cart-outline" size={size} color={color} />
           ),
@@ -94,13 +104,6 @@ export default function Layout() {
 
       <Tabs.Screen
         name="myPantry"
-        options={{
-          href: null,
-        }}
-      />
-
-      <Tabs.Screen
-        name="home"
         options={{
           href: null,
         }}

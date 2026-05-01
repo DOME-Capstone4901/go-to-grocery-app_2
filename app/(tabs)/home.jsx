@@ -1,231 +1,585 @@
-import React, { useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  FlatList,
-  Pressable,
+  ActivityIndicator,
+  Alert,
   ScrollView,
-} from 'react-native'
-import { router } from 'expo-router'
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { router, useFocusEffect } from 'expo-router';
 
-const GROCERY_ITEMS = [
-  { id: '1', name: 'Milk', category: 'Dairy' },
-  { id: '2', name: 'Eggs', category: 'Dairy' },
-  { id: '3', name: 'Bread', category: 'Bakery' },
-  { id: '4', name: 'Rice', category: 'Grains' },
-  { id: '5', name: 'Chicken Breast', category: 'Meat' },
-  { id: '6', name: 'Apples', category: 'Produce' },
-  { id: '7', name: 'Bananas', category: 'Produce' },
-  { id: '8', name: 'Tomatoes', category: 'Produce' },
-  { id: '9', name: 'Onions', category: 'Produce' },
-  { id: '10', name: 'Pasta', category: 'Pantry' },
-  { id: '11', name: 'Olive Oil', category: 'Pantry' },
-  { id: '12', name: 'Yogurt', category: 'Dairy' },
-  { id: '13', name: 'Cheddar Cheese', category: 'Dairy' },
-  { id: '14', name: 'Spinach', category: 'Produce' },
-  { id: '15', name: 'Salmon', category: 'Meat' },
-]
+import { deletePantryItem, getPantryItems } from '../../utils/pantryStore';
+import { getDaysUntilExpiration } from '../../utils/expiration';
+import { isLowStock } from '../../utils/lowStock';
+import { getPantrySuggestions } from '../../utils/suggestions';
+import { getRecipeSuggestions } from '../../utils/recipeAI';
+import { addToGroceryList, getGroceryList } from '../../utils/groceryStore';
+import { scheduleExpirationAlerts } from '../../utils/notifications';
+import { palette, shadows } from '../../utils/theme';
+import { supabase } from '../../src/lib/supabase';
 
-function uniq(arr) {
-  return Array.from(new Set(arr))
+function displayName(value) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value).trim();
+  }
+  if (Array.isArray(value)) {
+    return value.map(displayName).filter(Boolean).join(' ');
+  }
+  if (typeof value === 'object') {
+    return displayName(
+      value.name ||
+        value.item ||
+        value.ingredient ||
+        value.productName ||
+        value.title ||
+        value.label ||
+        value.value
+    );
+  }
+  return '';
 }
 
-export default function Home() {
-  const [query, setQuery] = useState('')
-  const [selectedCategory, setSelectedCategory] = useState('All')
-  const [cart, setCart] = useState([])
-  const [recent, setRecent] = useState([])
-  const [sortAZ, setSortAZ] = useState(true)
+function displayList(value) {
+  return Array.isArray(value) ? value.map(displayName).filter(Boolean) : [];
+}
 
-  const categories = useMemo(() => {
-    return ['All', ...uniq(GROCERY_ITEMS.map((i) => i.category)).sort()]
-  }, [])
+function groceryKey(value) {
+  return displayName(value).toLowerCase().trim();
+}
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    let list = GROCERY_ITEMS
-    if (selectedCategory !== 'All') {
-      list = list.filter((i) => i.category === selectedCategory)
+const quickActions = [
+  { title: 'Pantry', caption: 'View items', route: '/(tabs)/MainPantryTab', color: palette.greenDeep },
+  { title: 'Grocery', caption: 'Shopping list', route: '/(tabs)/groceryList', color: palette.orange },
+  { title: 'Add Item', caption: 'Manual entry', route: '/(tabs)/addToPantry', color: palette.sun },
+  { title: 'Scan', caption: 'Barcode + expiry', route: '/(tabs)/scan', color: palette.peachDeep },
+  { title: 'Recipes', caption: 'AI ideas', route: '/(tabs)/recipes', color: palette.green },
+  { title: 'Stores', caption: 'Compare prices', route: '/(tabs)/storeFinder', color: '#6B7F52' },
+];
+
+export default function HomeScreen() {
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
+  const [pantryCount, setPantryCount] = useState(0);
+  const [lowStockCount, setLowStockCount] = useState(0);
+  const [expiringSoonCount, setExpiringSoonCount] = useState(0);
+  const [suggestions, setSuggestions] = useState([]);
+  const [recipes, setRecipes] = useState([]);
+
+  useEffect(() => {
+    let active = true;
+
+    const syncSession = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!active) return;
+
+      if (!session) {
+        setIsAuthenticated(false);
+        setSessionChecked(true);
+        router.replace('/login');
+        return;
+      }
+
+      setIsAuthenticated(true);
+      setSessionChecked(true);
+    };
+
+    syncSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return;
+
+      const authenticated = Boolean(session);
+      setIsAuthenticated(authenticated);
+      setSessionChecked(true);
+
+      if (!authenticated) {
+        router.replace('/login');
+      }
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  const refreshHome = useCallback(async (isActive = () => true) => {
+    const items = getPantryItems();
+
+    setPantryCount(items.length);
+    setLowStockCount(items.filter(item => isLowStock(item)).length);
+    setExpiringSoonCount(
+      items.filter(item => {
+        const days = getDaysUntilExpiration(item.expirationDate);
+        return Number.isFinite(days) && days >= 0 && days <= 3;
+      }).length
+    );
+    setSuggestions(getPantrySuggestions(items));
+
+    try {
+      const recipeSuggestions = await getRecipeSuggestions(items);
+      if (isActive()) {
+        setRecipes(recipeSuggestions.slice(0, 3));
+      }
+    } catch {
+      if (isActive()) {
+        setRecipes([]);
+      }
     }
-    if (q) {
-      list = list.filter((i) => `${i.name} ${i.category}`.toLowerCase().includes(q))
+
+    scheduleExpirationAlerts();
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isAuthenticated) {
+        return undefined;
+      }
+
+      let active = true;
+      refreshHome(() => active);
+
+      return () => {
+        active = false;
+      };
+    }, [isAuthenticated, refreshHome])
+  );
+
+  const handleLogout = async () => {
+    if (loggingOut) return;
+
+    setLoggingOut(true);
+
+    try {
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        Alert.alert('Logout failed', error.message);
+        return;
+      }
+
+      router.replace('/login');
+    } finally {
+      setLoggingOut(false);
     }
-    list = [...list].sort((a, b) => {
-      const cmp = a.name.localeCompare(b.name)
-      return sortAZ ? cmp : -cmp
-    })
-    return list
-  }, [query, selectedCategory, sortAZ])
+  };
 
-  const suggestions = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return []
-    const starts = GROCERY_ITEMS.filter((i) => i.name.toLowerCase().startsWith(q))
-    const contains = GROCERY_ITEMS.filter(
-      (i) => !i.name.toLowerCase().startsWith(q) && i.name.toLowerCase().includes(q)
-    )
-    return [...starts, ...contains].slice(0, 5)
-  }, [query])
+  const groceryNames = new Set(
+    getGroceryList()
+      .map(item => String(item?.name || '').toLowerCase().trim())
+      .filter(Boolean)
+  );
 
-  const cartCount = cart.length
-  const toggleCart = (itemId) => {
-    setCart((prev) => (prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]))
+  if (!sessionChecked) {
+    return (
+      <View style={styles.authGate}>
+        <ActivityIndicator size="large" color={palette.greenDeep} />
+      </View>
+    );
   }
-  const pushRecent = (text) => {
-    const t = text.trim()
-    if (!t) return
-    setRecent((prev) => [t, ...prev.filter((x) => x !== t)].slice(0, 6))
+
+  if (!isAuthenticated) {
+    return null;
   }
 
   return (
-    <View style={styles.container}>
-      <View style={styles.headerRow}>
-        <View>
-          <Text style={styles.title}>Grocery Search</Text>
-          <Text style={styles.subtitle}>Find items fast • add to list</Text>
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.container}
+      showsVerticalScrollIndicator={false}
+    >
+      <View style={styles.decorBlobOne} />
+      <View style={styles.decorBlobTwo} />
+
+      <View style={styles.headerCard}>
+        <View style={styles.headerTextWrap}>
+          <Text style={styles.kicker}>Go To Grocery</Text>
+          <Text style={styles.title}>Welcome back</Text>
+          <Text style={styles.subtitle}>
+            Track pantry items, scan products, compare stores, and plan recipes.
+          </Text>
         </View>
-        <Pressable style={styles.cartPill} onPress={() => router.push({ pathname: '/details', params: { cartCount } })}>
-          <Text style={styles.cartText}>List: {cartCount}</Text>
-        </Pressable>
-        <Pressable style={styles.settingsBtn} onPress={() => router.push('/login')}>
-          <Text style={styles.settingsBtnText}>⚙️</Text>
-        </Pressable>
+
+        <TouchableOpacity
+          style={[styles.logoutButton, loggingOut && styles.logoutButtonDisabled]}
+          onPress={handleLogout}
+          disabled={loggingOut}
+        >
+          {loggingOut ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Text style={styles.logoutButtonText}>Log Out</Text>
+          )}
+        </TouchableOpacity>
       </View>
 
-      <TextInput
-        value={query}
-        onChangeText={setQuery}
-        placeholder="Search items (milk, apple, pasta...)"
-        placeholderTextColor="#888"
-        style={styles.input}
-        autoCapitalize="none"
-        autoCorrect={false}
-        onSubmitEditing={() => pushRecent(query)}
-        returnKeyType="search"
-      />
+      <View style={styles.statsRow}>
+        <View style={[styles.statCard, styles.statSoftGreen]}>
+          <Text style={styles.statNumber}>{pantryCount}</Text>
+          <Text style={styles.statLabel}>Total Items</Text>
+        </View>
+        <View style={[styles.statCard, styles.statSoftPeach]}>
+          <Text style={[styles.statNumber, lowStockCount > 0 && styles.alertText]}>
+            {lowStockCount}
+          </Text>
+          <Text style={styles.statLabel}>Low Stock</Text>
+        </View>
+        <View style={[styles.statCard, styles.statSoftCream]}>
+          <Text style={[styles.statNumber, expiringSoonCount > 0 && styles.alertText]}>
+            {expiringSoonCount}
+          </Text>
+          <Text style={styles.statLabel}>Expiring Soon</Text>
+        </View>
+      </View>
+
+      <View style={styles.sectionBlock}>
+        <Text style={styles.sectionTitle}>Quick Actions</Text>
+        <View style={styles.actionGrid}>
+          {quickActions.map(action => (
+            <TouchableOpacity
+              key={action.title}
+              style={[styles.actionCard, { backgroundColor: action.color }]}
+              onPress={() => router.push(action.route)}
+            >
+              <Text style={styles.actionTitle}>{action.title}</Text>
+              <Text style={styles.actionCaption}>{action.caption}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
 
       {suggestions.length > 0 && (
-        <View style={styles.suggestBox}>
-          {suggestions.map((s) => (
-            <Pressable key={s.id} style={styles.suggestRow} onPress={() => { setQuery(s.name); pushRecent(s.name) }}>
-              <Text style={styles.suggestText}>{s.name}</Text>
-              <Text style={styles.suggestMuted}>{s.category}</Text>
-            </Pressable>
+        <View style={styles.sectionBlock}>
+          <Text style={styles.sectionTitle}>Smart Pantry Suggestions</Text>
+          {suggestions.slice(0, 3).map((suggestion, index) => (
+            <View key={`${suggestion.type}-${index}`} style={styles.infoCard}>
+              <Text style={styles.infoText}>{suggestion.message}</Text>
+
+              {suggestion.type === 'lowStock' && (
+                <TouchableOpacity
+                  style={styles.smallButton}
+                  onPress={() => addToGroceryList(suggestion.item)}
+                >
+                  <Text style={styles.smallButtonText}>Add</Text>
+                </TouchableOpacity>
+              )}
+
+              {suggestion.type === 'expiringSoon' && (
+                <TouchableOpacity
+                  style={styles.smallButton}
+                  onPress={() => scheduleExpirationAlerts()}
+                >
+                  <Text style={styles.smallButtonText}>Remind</Text>
+                </TouchableOpacity>
+              )}
+
+              {suggestion.type === 'expired' && (
+                <TouchableOpacity
+                  style={styles.smallButton}
+                  onPress={() => {
+                    deletePantryItem(suggestion.item.id);
+                    refreshHome();
+                  }}
+                >
+                  <Text style={styles.smallButtonText}>Remove</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           ))}
         </View>
       )}
 
-      {recent.length > 0 && (
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Recent</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-            {recent.map((r) => (
-              <Pressable key={r} style={styles.chip} onPress={() => setQuery(r)}>
-                <Text style={styles.chipText}>{r}</Text>
-              </Pressable>
-            ))}
-            <Pressable style={[styles.chip, styles.chipDark]} onPress={() => setRecent([])}>
-              <Text style={[styles.chipText, styles.chipTextDark]}>Clear</Text>
-            </Pressable>
-          </ScrollView>
+      <View style={styles.sectionBlock}>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Recipe Ideas</Text>
+          <TouchableOpacity onPress={() => router.push('/(tabs)/recipes')}>
+            <Text style={styles.sectionLink}>Open Recipes</Text>
+          </TouchableOpacity>
         </View>
-      )}
 
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Category</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
-          {categories.map((c) => {
-            const active = c === selectedCategory
-            return (
-              <Pressable key={c} style={[styles.chip, active && styles.chipActive]} onPress={() => setSelectedCategory(c)}>
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{c}</Text>
-              </Pressable>
-            )
-          })}
-        </ScrollView>
-      </View>
-
-      <View style={styles.controlsRow}>
-        <Text style={styles.metaText}>Showing {filtered.length} / {GROCERY_ITEMS.length}</Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <Pressable style={styles.smallBtn} onPress={() => setSortAZ((v) => !v)}>
-            <Text style={styles.smallBtnText}>{sortAZ ? 'A–Z' : 'Z–A'}</Text>
-          </Pressable>
-          <Pressable style={styles.smallBtn} onPress={() => { setQuery(''); setSelectedCategory('All') }}>
-            <Text style={styles.smallBtnText}>Reset</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <FlatList
-        data={filtered}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.list}
-        keyboardShouldPersistTaps="handled"
-        renderItem={({ item }) => {
-          const inCart = cart.includes(item.id)
-          return (
-            <Pressable
-              style={styles.row}
-              onPress={() => router.push({ pathname: '/details', params: { name: item.name, category: item.category, inCart: inCart ? 'yes' : 'no' } })}
-            >
-              <View>
-                <Text style={styles.itemName}>{item.name}</Text>
-                <Text style={styles.itemCategory}>{item.category}</Text>
-              </View>
-              <Pressable style={[styles.addBtn, inCart && styles.addBtnActive]} onPress={() => toggleCart(item.id)}>
-                <Text style={[styles.addBtnText, inCart && styles.addBtnTextActive]}>{inCart ? 'Added' : 'Add'}</Text>
-              </Pressable>
-            </Pressable>
-          )
-        }}
-        ListEmptyComponent={
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>No matches. Try another search.</Text>
+        {recipes.length === 0 ? (
+          <View style={styles.infoCard}>
+            <Text style={styles.infoText}>
+              Add more pantry items to unlock AI recipe suggestions.
+            </Text>
           </View>
-        }
-      />
-    </View>
-  )
+        ) : (
+          recipes.map((recipe, index) => {
+            const missingItems = displayList(recipe.missing);
+            const pendingItems = missingItems.filter(item => groceryNames.has(groceryKey(item)));
+            const stillMissingItems = missingItems.filter(
+              item => !groceryNames.has(groceryKey(item))
+            );
+            const waitingOnPurchase =
+              !recipe.canCookNow &&
+              stillMissingItems.length === 0 &&
+              pendingItems.length > 0;
+
+            return (
+              <View key={`${recipe.name}-${index}`} style={styles.recipeCard}>
+                <Text style={styles.recipeName}>{displayName(recipe.name) || 'Recipe'}</Text>
+                {!!recipe.whyMatches && (
+                  <Text style={styles.recipeMeta}>{displayName(recipe.whyMatches)}</Text>
+                )}
+                {recipe.canCookNow ? (
+                  <Text style={styles.readyText}>You can cook this now</Text>
+                ) : waitingOnPurchase ? (
+                  <Text style={styles.pendingText}>
+                    Added to grocery list. Buy it and add to pantry.
+                  </Text>
+                ) : (
+                  <Text style={styles.missingText}>
+                    Missing: {stillMissingItems.join(', ')}
+                  </Text>
+                )}
+              </View>
+            );
+          })
+        )}
+      </View>
+    </ScrollView>
+  );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#f5f5f5' },
-  headerRow: { marginTop: 10, marginBottom: 10, flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between' },
-  title: { fontSize: 26, fontWeight: '700' },
-  subtitle: { marginTop: 4, color: '#666' },
-  cartPill: { backgroundColor: '#111', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
-  cartText: { color: '#fff', fontWeight: '700' },
-  settingsBtn: { padding: 8 },
-  settingsBtnText: { fontSize: 22 },
-  input: { backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontSize: 16 },
-  suggestBox: { backgroundColor: '#fff', borderRadius: 12, marginTop: 8, overflow: 'hidden' },
-  suggestRow: { paddingHorizontal: 14, paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between' },
-  suggestText: { fontWeight: '700' },
-  suggestMuted: { color: '#666' },
-  section: { marginTop: 12 },
-  sectionTitle: { fontWeight: '700', marginBottom: 8 },
-  chipRow: { gap: 8, paddingBottom: 4 },
-  chip: { backgroundColor: '#fff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
-  chipText: { fontWeight: '600' },
-  chipActive: { backgroundColor: '#111' },
-  chipTextActive: { color: '#fff' },
-  chipDark: { backgroundColor: '#111' },
-  chipTextDark: { color: '#fff' },
-  controlsRow: { marginTop: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  metaText: { color: '#666' },
-  smallBtn: { backgroundColor: '#111', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 10 },
-  smallBtnText: { color: '#fff', fontWeight: '700' },
-  list: { paddingTop: 12, paddingBottom: 24 },
-  row: { backgroundColor: '#fff', borderRadius: 12, padding: 14, marginBottom: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  itemName: { fontSize: 16, fontWeight: '700' },
-  itemCategory: { marginTop: 2, color: '#666' },
-  addBtn: { paddingVertical: 8, paddingHorizontal: 14, borderRadius: 10, backgroundColor: '#f0f0f0' },
-  addBtnActive: { backgroundColor: '#111' },
-  addBtnText: { fontWeight: '700' },
-  addBtnTextActive: { color: '#fff' },
-  empty: { marginTop: 20, alignItems: 'center' },
-  emptyText: { color: '#666' },
-})
+  root: {
+    flex: 1,
+    backgroundColor: palette.bg,
+  },
+  authGate: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.bg,
+  },
+  container: {
+    padding: 16,
+    paddingBottom: 34,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  decorBlobOne: {
+    position: 'absolute',
+    top: -28,
+    right: -28,
+    width: 138,
+    height: 138,
+    borderRadius: 999,
+    backgroundColor: '#F8D1B9',
+    opacity: 0.22,
+  },
+  decorBlobTwo: {
+    position: 'absolute',
+    top: 154,
+    left: -46,
+    width: 120,
+    height: 120,
+    borderRadius: 999,
+    backgroundColor: '#DDE6D5',
+    opacity: 0.22,
+  },
+  headerCard: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#F7EFE6',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: palette.border,
+    marginBottom: 14,
+    ...shadows.card,
+  },
+  headerTextWrap: {
+    flex: 1,
+  },
+  kicker: {
+    color: palette.orange,
+    fontWeight: '800',
+    fontSize: 12,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  title: {
+    marginTop: 4,
+    fontSize: 30,
+    fontWeight: '800',
+    color: palette.greenDeep,
+    letterSpacing: 0.2,
+  },
+  subtitle: {
+    marginTop: 6,
+    color: palette.muted,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  logoutButton: {
+    backgroundColor: palette.greenDeep,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    minWidth: 82,
+    alignItems: 'center',
+  },
+  logoutButtonDisabled: {
+    opacity: 0.75,
+  },
+  logoutButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 18,
+  },
+  statCard: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadows.card,
+  },
+  statSoftGreen: {
+    backgroundColor: '#EEF5EA',
+  },
+  statSoftPeach: {
+    backgroundColor: '#FBE6DD',
+  },
+  statSoftCream: {
+    backgroundColor: '#F8F1E8',
+  },
+  statNumber: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: palette.greenDeep,
+  },
+  alertText: {
+    color: palette.orange,
+  },
+  statLabel: {
+    marginTop: 4,
+    textAlign: 'center',
+    color: palette.muted,
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  sectionBlock: {
+    marginBottom: 18,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: palette.greenDeep,
+    marginBottom: 10,
+  },
+  sectionLink: {
+    color: palette.orange,
+    fontWeight: '800',
+  },
+  actionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  actionCard: {
+    width: '48%',
+    borderRadius: 14,
+    padding: 14,
+    minHeight: 78,
+    justifyContent: 'space-between',
+    ...shadows.card,
+  },
+  actionTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  actionCaption: {
+    marginTop: 8,
+    color: '#fff',
+    opacity: 0.9,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  infoCard: {
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 9,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadows.card,
+  },
+  infoText: {
+    color: palette.text,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  smallButton: {
+    marginTop: 10,
+    alignSelf: 'flex-start',
+    backgroundColor: palette.orange,
+    borderRadius: 9,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+  },
+  smallButtonText: {
+    color: '#fff',
+    fontWeight: '800',
+  },
+  recipeCard: {
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 9,
+    borderWidth: 1,
+    borderColor: palette.border,
+    ...shadows.card,
+  },
+  recipeName: {
+    color: palette.greenDeep,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  recipeMeta: {
+    marginTop: 5,
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  readyText: {
+    marginTop: 6,
+    color: palette.success,
+    fontWeight: '700',
+  },
+  missingText: {
+    marginTop: 6,
+    color: palette.peachDeep,
+    fontWeight: '700',
+  },
+  pendingText: {
+    marginTop: 6,
+    color: palette.muted,
+    fontWeight: '700',
+  },
+});

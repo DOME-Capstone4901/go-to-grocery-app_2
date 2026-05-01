@@ -17,26 +17,34 @@ import { palette } from '../utils/theme';
 
 function shouldHideGlobalSearch(pathname) {
   if (!pathname) return false;
+  const currentPath = pathname.toLowerCase();
+
   if (
-    pathname === '/Search' ||
-    pathname.endsWith('/Search') ||
-    pathname.includes('Search')
+    currentPath === '/search' ||
+    currentPath.endsWith('/search') ||
+    currentPath.includes('search')
   ) {
     return true;
   }
-  if (
-    pathname.includes('store-shop') ||
-    pathname.includes('store-checkout') ||
-    pathname.includes('store-orders') ||
-    pathname.includes('recipes') ||
-    pathname.includes('scan') ||
-    pathname.includes('addToPantry') ||
-    pathname.includes('profile') ||
-    pathname === '/login'
-  ) {
-    return true;
-  }
-  return false;
+
+  const hiddenRoutes = [
+    'home',
+    'mainpantrytab',
+    'mypantry',
+    'pantry',
+    'grocerylist',
+    'storefinder',
+    'store-shop',
+    'store-checkout',
+    'store-orders',
+    'recipes',
+    'scan',
+    'addtopantry',
+    'profile',
+    'login',
+  ];
+
+  return hiddenRoutes.some(route => currentPath.includes(route));
 }
 
 export default function GlobalSearchBar() {

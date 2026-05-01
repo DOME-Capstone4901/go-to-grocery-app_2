@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { formatExpirationDate, parseExpirationDate } from './expiration';
+import { addToGroceryList } from './groceryStore';
+import { isLowStock } from './lowStock';
 
 const STORAGE_KEY = 'PANTRY';
 /** Older standalone screen `app/(tabs)/pantry.jsx` used this key + `expiry` / `qty` fields. */
@@ -43,6 +45,36 @@ async function save() {
   } catch (e) {
     console.log('Error saving pantry:', e);
   }
+}
+
+export async function useItem(id, amountUsed = 1) {
+  const item = pantryItems.find(entry => entry.id === id);
+  if (!item) return null;
+
+  const currentQty = Number(item.quantity);
+  const usedQty = Number(amountUsed);
+  const nextQty = Math.max(
+    0,
+    (Number.isFinite(currentQty) ? currentQty : 1) -
+      (Number.isFinite(usedQty) && usedQty > 0 ? usedQty : 1)
+  );
+
+  if (nextQty === 0) {
+    deletePantryItem(id);
+  } else {
+    updatePantryItem(id, { quantity: nextQty });
+  }
+
+  const updated = { ...item, quantity: nextQty };
+  if (isLowStock(updated)) {
+    addToGroceryList({
+      name: item.name,
+      quantity: 1,
+      ...(item.cheapestStore ? { cheapestStore: item.cheapestStore } : {}),
+    });
+  }
+
+  return updated;
 }
 
 /**

@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 
-const BACKEND_PORT = '3000';
+const BACKEND_PORT = '3001';
 
 function cleanBase(value) {
   return String(value || '').trim().replace(/\/$/, '');

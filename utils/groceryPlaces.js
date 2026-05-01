@@ -153,6 +153,38 @@ function makeDemoStores(lat, lng) {
   }));
 }
 
+function demoStoreResponse(lat, lng, label = '', note = '') {
+  return {
+    lat: Number(lat),
+    lng: Number(lng),
+    locationLabel: label,
+    stores: makeDemoStores(lat, lng),
+    brands: GROCERY_BRANDS,
+    mode: 'client_demo_fallback',
+    note,
+  };
+}
+
+function postJsonWithTimeout(url, body, timeoutMs = 1800) {
+  if (typeof AbortController === 'undefined') {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: controller.signal,
+    body: JSON.stringify(body),
+  }).finally(() => clearTimeout(timeoutId));
+}
+
 /**
  * Loads Walmart, Kroger, and Aldi near a point via the recipe backend (Google Places Nearby Search).
  */
@@ -170,29 +202,26 @@ export async function fetchGroceryChainStores(params = {}) {
 
   let res;
   try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    res = await postJsonWithTimeout(url, body);
   } catch (e) {
     const msg = e?.message || String(e);
     const isNetwork =
       msg === 'Failed to fetch' ||
       msg.includes('Network request failed') ||
-      e?.name === 'TypeError';
+      e?.name === 'TypeError' ||
+      e?.name === 'AbortError' ||
+      msg.toLowerCase().includes('abort');
+
+    if (isNetwork && hasCoords) {
+      return demoStoreResponse(
+        lat,
+        lng,
+        q,
+        `Could not reach ${apiBase} quickly. Showing demo stores while backend is offline or slow.`
+      );
+    }
+
     if (isNetwork) {
-      if (hasCoords) {
-        return {
-          lat: Number(lat),
-          lng: Number(lng),
-          locationLabel: q || '',
-          stores: makeDemoStores(lat, lng),
-          brands: GROCERY_BRANDS,
-          mode: 'client_demo_fallback',
-          note: `Could not reach ${apiBase}. Showing demo stores while backend is offline.`,
-        };
-      }
       throw new Error(
         `Cannot reach the store API at ${apiBase}. Start backend in recipe-backend and verify EXPO_PUBLIC_RECIPE_API_URL points to it.`
       );
@@ -202,6 +231,14 @@ export async function fetchGroceryChainStores(params = {}) {
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if (hasCoords) {
+      return demoStoreResponse(
+        lat,
+        lng,
+        data.locationLabel || q,
+        data.error || `Stores request failed (${res.status}). Showing demo stores.`
+      );
+    }
     throw new Error(data.error || `Stores request failed (${res.status})`);
   }
   return data;

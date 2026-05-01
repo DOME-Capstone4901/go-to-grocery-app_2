@@ -5,7 +5,7 @@ import Swipeable from 'react-native-gesture-handler/Swipeable';
 
 import { formatExpirationDate, getDaysUntilExpiration, parseExpirationDate } from '../../utils/expiration';
 import { isLowStock } from '../../utils/lowStock';
-import { deletePantryItem } from '../../utils/pantryStore';
+import { deletePantryItem, useItem } from '../../utils/pantryStore';
 import { palette, shadows } from '../../utils/theme';
 
 export default function PantryFilter({ groupedItems }) {
@@ -40,7 +40,7 @@ export default function PantryFilter({ groupedItems }) {
       style={styles.deleteButton}
       onPress={() => {
         deletePantryItem(id);
-        router.replace('/MainPantryTab'); // refresh
+        router.replace('/(tabs)/MainPantryTab');
       }}
     >
       <Text style={styles.deleteText}>Delete</Text>
@@ -53,7 +53,7 @@ export default function PantryFilter({ groupedItems }) {
     const expired = hasExpiry && days < 0;
     const expiringSoon = hasExpiry && days >= 0 && days <= 3;
     const qty = Number(item.quantity);
-    const qtyLabel = Number.isFinite(qty) && qty > 0 ? qty : '—';
+    const qtyLabel = Number.isFinite(qty) && qty > 0 ? qty : '-';
 
     return (
       <Swipeable renderRightActions={() => renderRightActions(item.id)}>
@@ -87,6 +87,18 @@ export default function PantryFilter({ groupedItems }) {
               ) : (
                 <Text style={styles.date}>Expires: {formatExpirationDate(item.expirationDate)}</Text>
               )}
+              <View style={styles.cardActions}>
+                <TouchableOpacity
+                  style={styles.useButton}
+                  onPress={async event => {
+                    event?.stopPropagation?.();
+                    await useItem(item.id);
+                    router.replace('/(tabs)/MainPantryTab');
+                  }}
+                >
+                  <Text style={styles.useButtonText}>Use 1</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         </TouchableOpacity>
@@ -102,7 +114,7 @@ export default function PantryFilter({ groupedItems }) {
         <Text style={styles.heroTitle}>Pantry Overview</Text>
         <Text style={styles.heroSubtitle}>
           {totalListed > 0
-            ? `${totalListed} item${totalListed === 1 ? '' : 's'} listed — track freshness and restock.`
+            ? `${totalListed} item${totalListed === 1 ? '' : 's'} listed - track freshness and restock.`
             : 'Track freshness and restock at the right time.'}
         </Text>
       </View>
@@ -268,6 +280,21 @@ const styles = StyleSheet.create({
   date: {
     marginTop: 6,
     color: palette.muted,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
+  useButton: {
+    backgroundColor: palette.greenDeep,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  useButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 13,
   },
   deleteButton: {
     backgroundColor: palette.peachDeep,

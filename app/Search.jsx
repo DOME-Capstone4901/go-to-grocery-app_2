@@ -30,18 +30,20 @@ import { searchUsZipCodes } from '../utils/locationSearch';
 import { getStoreCartCount } from '../utils/storeCartStore';
 import { palette, shadows } from '../utils/theme';
 
-const PRICE_COMPARE_ITEM_IDS = [
-  'whole_milk_1gal',
-  'eggs_large_dozen',
-  'bread_whole_wheat_loaf',
-  'bananas_1lb',
-  'chicken_breast_boneless_1lb',
+const PRICE_COMPARE_ITEM_NAMES = [
+  'Whole milk 1 gal',
+  'Large eggs 12ct',
+  'Whole wheat bread 20oz',
+  'Bananas',
+  'Chicken breast boneless skinless',
 ];
 
 function buildStorePriceSummary(brand) {
   const normalizedBrand = String(brand || 'walmart').toLowerCase();
-  const compareItems = PRICE_COMPARE_ITEM_IDS.map(id =>
-    DEMO_INVENTORY.find(item => item.id === id)
+  const compareItems = PRICE_COMPARE_ITEM_NAMES.map(name =>
+    DEMO_INVENTORY.find(
+      item => item.name.toLowerCase() === name.toLowerCase()
+    )
   ).filter(Boolean);
 
   if (!compareItems.length) {
@@ -58,7 +60,7 @@ function buildStorePriceSummary(brand) {
   const itemPreviewText = compareItems
     .slice(0, 3)
     .map(item => `${item.name}: ${formatMoney(priceForBrand(item, normalizedBrand))}`)
-    .join(' · ');
+    .join(' - ');
 
   return {
     basketTotalText: formatMoney(basketTotal),
@@ -222,12 +224,12 @@ export default function SearchScreen() {
       <View style={styles.headerRow}>
         <View style={{ flex: 1, paddingRight: 8 }}>
           <Text style={styles.title}>
-            {searchMode === 'grocery' ? 'Grocery Search' : 'Walmart · Kroger · Aldi'}
+            {searchMode === 'grocery' ? 'Grocery Search' : 'Store Finder'}
           </Text>
           <Text style={styles.subtitle}>
             {searchMode === 'grocery'
               ? 'Find items fast and add them to your list'
-              : 'ZIP or city + state finds the area; stores use Google Places (backend API key).'}
+              : 'ZIP or city + state finds nearby demo stores. Add Google Maps key for live places.'}
           </Text>
         </View>
 
@@ -283,7 +285,7 @@ export default function SearchScreen() {
             <TextInput
               value={query}
               onChangeText={setQuery}
-              placeholder="Type a letter or keyword…"
+              placeholder="Type a letter or keyword..."
               placeholderTextColor="#888"
               style={[styles.input, styles.inputFlex]}
               autoCapitalize="none"
@@ -399,12 +401,17 @@ export default function SearchScreen() {
           />
         </>
       ) : (
-        <>
+        <ScrollView
+          style={styles.placeScroll}
+          contentContainerStyle={styles.placeScrollContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator
+        >
           <View style={styles.searchInputRow}>
             <TextInput
               value={placeQuery}
               onChangeText={setPlaceQuery}
-              placeholder="ZIP, city, or one letter…"
+              placeholder="ZIP, city, or one letter..."
               placeholderTextColor="#888"
               style={[styles.input, styles.inputFlex]}
               autoCapitalize="none"
@@ -453,13 +460,14 @@ export default function SearchScreen() {
               lat={storeMapCenter.lat}
               lng={storeMapCenter.lng}
               subtitle={areaLabel || undefined}
+              stores={groceryStores}
             />
           ) : null}
 
           <View style={styles.controlsRow}>
             <Text style={styles.metaText}>
               {placeLoading
-                ? 'Loading stores…'
+                ? 'Loading stores...'
                 : `${groceryStores.length} store${groceryStores.length === 1 ? '' : 's'} (Walmart, Kroger, Aldi)`}
             </Text>
             <Pressable
@@ -479,8 +487,9 @@ export default function SearchScreen() {
           <FlatList
             data={groceryStores}
             keyExtractor={item => item.id}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={[styles.list, styles.storeResultsList]}
             keyboardShouldPersistTaps="handled"
+            scrollEnabled={false}
             renderItem={({ item }) => (
               <View style={styles.row}>
                 <View style={{ flex: 1, paddingRight: 8 }}>
@@ -495,7 +504,7 @@ export default function SearchScreen() {
                         <Text style={styles.itemName}>{item.name}</Text>
                         <Text style={styles.itemCategory}>
                           {item.address || 'Address on map'}
-                          {item.miles != null ? ` · ~${item.miles} mi` : ''}
+                          {item.miles != null ? ` - ~${item.miles} mi` : ''}
                         </Text>
                         <Text style={styles.priceHint}>
                           Est. basket (5 items): {priceSummary.basketTotalText}
@@ -546,15 +555,15 @@ export default function SearchScreen() {
               <View style={styles.empty}>
                 <Text style={styles.emptyText}>
                   {placeLoading
-                    ? 'Searching…'
+                    ? 'Searching...'
                     : placeQuery.trim()
                       ? 'No Walmart, Kroger, or Aldi found in that area (try another ZIP or city).'
-                      : 'Enter a US ZIP or city + state. Set EXPO_PUBLIC_RECIPE_API_URL and run recipe-backend with GOOGLE_MAPS_API_KEY.'}
+                      : 'Enter a US ZIP or city + state. Google Maps key is optional; demo stores are shown when no key is configured.'}
                 </Text>
               </View>
             }
           />
-        </>
+        </ScrollView>
       )}
     </View>
   );
@@ -617,6 +626,12 @@ const styles = StyleSheet.create({
     color: palette.greenDeep,
     fontWeight: '700',
     fontSize: 12,
+  },
+  placeScroll: {
+    flex: 1,
+  },
+  placeScrollContent: {
+    paddingBottom: 170,
   },
   modeRow: {
     flexDirection: 'row',
@@ -814,6 +829,7 @@ const styles = StyleSheet.create({
   },
   smallBtnText: { color: '#fff', fontWeight: '700' },
   list: { paddingTop: 12, paddingBottom: 24 },
+  storeResultsList: { paddingBottom: 130 },
   row: {
     backgroundColor: palette.surface,
     borderRadius: 12,

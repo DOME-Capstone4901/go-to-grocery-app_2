@@ -91,6 +91,40 @@ function makeDemoStores(lat, lng) {
     .sort((a, b) => (a.miles ?? 0) - (b.miles ?? 0));
 }
 
+function resolveDemoLocation(query) {
+  const raw = String(query || "").trim();
+  const normalized = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+  const known = [
+    { keys: ["denton", "denton tx"], lat: 33.2148, lng: -97.1331, label: "Denton, TX" },
+    { keys: ["forney", "forney tx"], lat: 32.7482, lng: -96.4719, label: "Forney, TX" },
+    { keys: ["dfw", "dallas fort worth", "dallas tx", "dallas"], lat: 32.7767, lng: -96.797, label: "Dallas, TX" },
+    { keys: ["fort worth", "fort worth tx"], lat: 32.7555, lng: -97.3308, label: "Fort Worth, TX" },
+    { keys: ["austin", "austin tx"], lat: 30.2672, lng: -97.7431, label: "Austin, TX" },
+    { keys: ["houston", "houston tx"], lat: 29.7604, lng: -95.3698, label: "Houston, TX" },
+    { keys: ["chicago", "chicago il"], lat: 41.8781, lng: -87.6298, label: "Chicago, IL" },
+    { keys: ["new york", "new york ny", "nyc"], lat: 40.7128, lng: -74.006, label: "New York, NY" },
+  ];
+
+  const hit = known.find((entry) => entry.keys.includes(normalized));
+  if (hit) return hit;
+
+  if (/^\d{5}$/.test(raw)) {
+    const zipFallbacks = {
+      "76201": { lat: 33.2148, lng: -97.1331, label: "Denton, TX 76201" },
+      "75201": { lat: 32.7767, lng: -96.797, label: "Dallas, TX 75201" },
+      "76010": { lat: 32.7357, lng: -97.1081, label: "Arlington, TX 76010" },
+      "78701": { lat: 30.2672, lng: -97.7431, label: "Austin, TX 78701" },
+    };
+    return zipFallbacks[raw] || null;
+  }
+
+  return null;
+}
+
 async function googleGeocode(address, apiKey) {
   const url = new URL("https://maps.googleapis.com/maps/api/geocode/json");
   url.searchParams.set("address", address);
@@ -553,11 +587,15 @@ app.post("/places/grocery-stores", async (req, res) => {
   let locationLabel = null;
 
   if ((lat == null || lng == null) && q) {
-    const geo = await googleGeocode(q, GOOGLE_MAPS_API_KEY);
+    const geo = GOOGLE_MAPS_API_KEY
+      ? await googleGeocode(q, GOOGLE_MAPS_API_KEY)
+      : resolveDemoLocation(q);
     if (!geo) {
       return res.status(400).json({
         error:
-          "Could not resolve that location. Try a US ZIP (5 digits), or City, ST (e.g. Austin, TX).",
+          GOOGLE_MAPS_API_KEY
+            ? "Could not resolve that location. Try a US ZIP (5 digits), or City, ST (e.g. Austin, TX)."
+            : "Google Maps is not configured, so demo mode only supports common demo cities like Denton, Dallas, Austin, Houston, Chicago, and New York.",
       });
     }
     lat = geo.lat;
